@@ -90,6 +90,26 @@ const PLAYER_READY_TIMEOUT = 20000;
 // Survives the screen being rebuilt after an error (same page, sound already allowed).
 let startedOnce = false;
 
+// Remembers that this computer already started the karaoke, so a reload (Chrome restarting,
+// power cut, Windows update) starts again by itself instead of waiting for a click nobody gives.
+const STARTED_KEY = 'karaoke_started';
+function wasStarted() {
+  try {
+    return localStorage.getItem(STARTED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+function markStarted() {
+  try {
+    localStorage.setItem(STARTED_KEY, '1');
+  } catch {}
+}
+// After a reload without a click, Chrome may refuse to play with sound. Then the video plays muted
+// (better than a stopped queue) and the screen asks for one click to turn the sound on.
+const SOUND_CHECK_AFTER = 5000;
+const hasUserClicked = () => (navigator as any).userActivation?.hasBeenActive === true;
+
 export default function TvPage() {
   const [admin, setAdmin] = useAdmin();
   if (admin === null)
@@ -105,6 +125,7 @@ export default function TvPage() {
 function Tv({ onLogout }: { onLogout: () => void }) {
   const { queue, singers, settings, results, loaded, refresh } = useLive({ tv: true });
   const [started, setStarted] = useState(startedOnce);
+  const [muted, setMuted] = useState(false); // playing without sound: waiting for a click
   const [showSettings, setShowSettings] = useState(false);
   const [origin, setOrigin] = useState('');
   const [intro, setIntro] = useState<{ id: number; left: number } | null>(null);
@@ -124,8 +145,34 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const deadSkips = useRef(0);
   const introTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const soundTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mutedRef = useRef(false);
 
-  useEffect(() => setOrigin(window.location.origin), []);
+  useEffect(() => {
+    setOrigin(window.location.origin);
+    if (wasStarted()) setStarted(true);
+  }, []);
+
+  /** The browser blocked sound: play muted and ask for a click. */
+  function goMuted() {
+    const p = playerRef.current;
+    if (!p) return;
+    p.mute?.();
+    p.playVideo?.();
+    mutedRef.current = true;
+    setMuted(true);
+  }
+
+  /** One click anywhere on the screen after a muted start: sound back on. */
+  function unmute() {
+    const p = playerRef.current;
+    mutedRef.current = false;
+    setMuted(false);
+    if (!p) return;
+    p.unMute?.();
+    p.setVolume?.(settingsRef.current?.volume ?? 100);
+    if (!onHold(settingsRef.current) && p.getPlayerState?.() !== 1) p.playVideo?.();
+  }
 
   const playing = queue.find((q) => q.status === 'playing') ?? null;
   const waiting = queue.filter((q) => q.status === 'waiting' && singers[q.singer_id]?.status === 'approved');
@@ -186,6 +233,18 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     // on hold (paused, or contest results on screen): get it ready without a burst of sound
     if (onHold(settingsRef.current) && p.cueVideoById) p.cueVideoById({ videoId: item.video_id, startSeconds });
     else p.loadVideoById({ videoId: item.video_id, startSeconds });
+    if (mutedRef.current) p.mute?.();
+
+    // Started by itself after a reload (nobody clicked yet) and the video did not start: Chrome is
+    // holding the sound. Checked before the watchdog could ever count this video as dead.
+    if (soundTimer.current) clearTimeout(soundTimer.current);
+    soundTimer.current = setTimeout(() => {
+      const pl = playerRef.current;
+      if (!pl || loadedVideo.current !== item.id || mutedRef.current || hasUserClicked()) return;
+      if (onHold(settingsRef.current)) return;
+      const st = pl.getPlayerState?.();
+      if (st !== 1 && st !== 3) goMuted();
+    }, SOUND_CHECK_AFTER);
   }
 
   /** Loads the current video again, from where it was. Used when it froze or never started. */
@@ -239,6 +298,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     if (!started) return;
     startedOnce = true;
+    markStarted();
     let cancelled = false;
     let readyTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -309,6 +369,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     return () => {
       cancelled = true;
       clearTimeout(readyTimer);
+      if (soundTimer.current) clearTimeout(soundTimer.current);
       if (introTimer.current) clearInterval(introTimer.current);
       introTimer.current = null;
       if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -587,6 +648,12 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           </div>
         )}
         {notice && <div className="toast">{notice}</div>}
+
+        {started && muted && (
+          <button className="sound-overlay" onClick={unmute}>
+            <span>🔇 Clique na tela para ligar o som</span>
+          </button>
+        )}
 
         {!started && (
           <button className="start-overlay" onClick={() => setStarted(true)}>

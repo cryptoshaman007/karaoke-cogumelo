@@ -56,6 +56,7 @@ const FAKE_YT = `
       p.stallAt = null;
       if (cue) return set(S.CUED);
       if (mode === 'dead') return set(S.UNSTARTED);
+      if (mode === 'soundblocked' && !p.muted) return set(S.UNSTARTED); // Chrome holding the sound until a click
       if (typeof mode === 'string' && mode.startsWith('error')) { set(S.UNSTARTED); return fire('onError', Number(mode.slice(5))); }
       if (typeof mode === 'string' && mode.startsWith('stall')) p.stallAt = Number(mode.slice(5));
       set(S.BUFFERING);
@@ -63,7 +64,12 @@ const FAKE_YT = `
     };
     p.loadVideoById = (o) => start(o.videoId, o.startSeconds, false);
     p.cueVideoById = (o) => start(o.videoId, o.startSeconds, true);
-    p.playVideo = () => { if ([S.PAUSED, S.CUED].includes(p.state)) set(S.PLAYING); };
+    p.playVideo = () => {
+      if ([S.PAUSED, S.CUED].includes(p.state)) set(S.PLAYING);
+      else if (p.state === S.UNSTARTED && p.mode === 'soundblocked' && p.muted) set(S.PLAYING);
+    };
+    p.mute = () => { p.muted = true; };
+    p.unMute = () => { p.muted = false; };
     p.pauseVideo = () => { if (p.state === S.PLAYING || p.state === S.BUFFERING) set(S.PAUSED); };
     p.stopVideo = () => { p.state = S.UNSTARTED; };
     p.seekTo = (t) => { p.time = t; };
@@ -521,8 +527,9 @@ await test('fechar e reabrir o navegador no meio da música: continua de onde pa
   await until(page, async () => (await yt(page)).time > 40, 80000);
   await page.reload();
   await run(page, 500);
-  await page.locator('.start-overlay').click();
+  // nobody is at the computer: it must start again by itself, no click
   await until(page, async () => (await yt(page)).loads.length === 1, 10000);
+  expect((await page.locator('.start-overlay').count()) === 0, 'ficou esperando um clique em "iniciar"');
   const y = await yt(page);
   expect(y.loads[0]?.videoId === 'vidAAAAAAA1' && y.loads[0].startSeconds > 30, `não retomou: ${JSON.stringify(y.loads)}`);
   expect(b.queue[1].status === 'waiting', 'a fila mudou ao reabrir');
@@ -530,6 +537,35 @@ await test('fechar e reabrir o navegador no meio da música: continua de onde pa
   return `retomou em ${Math.round(y.loads[0].startSeconds)} s`;
 });
 
+await test('navegador reabre e segura o som sem clique: toca sem som e um clique liga o som', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'vidAAAAAAA1', { duration: 200 });
+  b.add('Bia', 'vidBBBBBBB2', { duration: 200 });
+  const { page, ctx } = await openTv(b);
+  await page.evaluate(() => (window.__yt.dur.vidAAAAAAA1 = 200));
+  await until(page, async () => (await yt(page)).time > 20, 60000);
+  // after the reload Chrome holds the sound of this video until someone clicks
+  await page.addInitScript(() => {
+    const y = (window.__yt = window.__yt || { players: [], loads: [], behavior: {}, dur: {}, noReady: 0 });
+    y.behavior.vidAAAAAAA1 = 'soundblocked';
+    y.dur.vidAAAAAAA1 = 200;
+    // like a fresh Chrome start: nobody has touched this page yet
+    Object.defineProperty(navigator, 'userActivation', { get: () => ({ hasBeenActive: false, isActive: false }) });
+  });
+  await page.reload();
+  await until(page, async () => (await yt(page)).state === 1, 20000);
+  const p = await page.evaluate(() => { const pl = window.__yt.players.at(-1); return { muted: pl.muted, time: pl.time }; });
+  expect(p.muted, `não tocou sem som: ${JSON.stringify(await page.evaluate(() => ({ loads: window.__yt.loads, act: navigator.userActivation?.hasBeenActive })))}`);
+  expect((await page.locator('.sound-overlay').count()) === 1, 'não pediu clique para ligar o som');
+  await run(page, 300000); // five minutes muted: the watchdog must not skip it
+  expect(b.queue[0].status !== 'skipped', `pulou a música tocando sem som: ${statuses(b)}`);
+  await page.locator('.sound-overlay').click();
+  await run(page, 500);
+  const after = await page.evaluate(() => window.__yt.players.at(-1).muted);
+  expect(!after && (await page.locator('.sound-overlay').count()) === 0, 'o clique não ligou o som');
+  await ctx.close();
+  return 'tocou sem som e o clique ligou';
+});
 await test('admin pula pelo celular e cliques repetidos em "pular": só uma música é pulada por vez', async () => {
   const b = makeBackend();
   for (const [n, v] of [['Ana', 'vidAAAAAAA1'], ['Bia', 'vidBBBBBBB2'], ['Caio', 'vidCCCCCCC3'], ['Duda', 'vidDDDDDDD4']]) b.add(n, v, { duration: 300 });
