@@ -52,6 +52,18 @@ A fila fica salva no Supabase, então fechar o navegador ou desligar o PC não p
 - Votos e reações passam por funções do banco (`cast_vote`, `send_reaction`) chamadas só pelo servidor: uma ida ao banco por toque.
 - Limite de tentativas no login do admin (8 erros em 15 min), nas entradas e nas buscas, guardado na tabela `rate_events`.
 
+## Estabilidade
+
+O telão foi feito para ficar a noite inteira aberto sem ninguém mexer:
+
+- Um vigia confere o vídeo a cada 3 segundos. Se o fim da música não chegou ao servidor (internet piscou), ele tenta de novo até conseguir. Se o vídeo congelou, recarrega no mesmo ponto. Se alguém pausou clicando no vídeo, volta a tocar. Se o vídeo nunca começa, tenta de novo e só depois de 4 minutos pula (no máximo dois seguidos; depois disso avisa para conferir a internet e continua tentando).
+- Vídeo que o dono bloqueou para tocar fora do YouTube é recusado na hora de escolher, e pulado com aviso se mesmo assim chegar ao telão.
+- Nenhum pedido fica pendurado para sempre: todos têm tempo limite.
+- Se o tempo real do Supabase cair, as telas passam a consultar o banco a cada 5 segundos e refazem a conexão.
+- Se a tela der erro, ela se reconstrói sozinha em vez de ficar em uma página de erro.
+
+`tests/stability.mjs` simula tudo isso (banco, servidor e YouTube falsos, relógio acelerado) e roda em cerca de dois minutos. As instruções estão no começo do arquivo.
+
 ## Banco de dados
 
 `supabase/schema.sql` cria o banco do zero. Depois rode, em ordem, os arquivos de `supabase/migrations/` (SQL Editor do Supabase). As migrações só adicionam coisas; o app funciona sem elas, mas as funções novas do admin (pausar, volume, recado, fila aberta/fechada) avisam que precisam da atualização.

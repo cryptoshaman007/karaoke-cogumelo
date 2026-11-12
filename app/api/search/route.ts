@@ -6,6 +6,8 @@ import { fail, json } from '@/lib/http';
 import { recordHit, tooMany } from '@/lib/rate';
 
 export const dynamic = 'force-dynamic';
+// room for a slow first try plus one retry; the phone gives up at 24 s
+export const maxDuration = 30;
 
 export async function GET(req: NextRequest) {
   // Customers search with their token; the admin panel searches with its cookie.

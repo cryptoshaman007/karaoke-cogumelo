@@ -3,6 +3,7 @@ import { advanceQueue, db, getSettings } from '@/lib/supabase-server';
 import { hashToken, isAdmin, newSingerToken } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
 import { cleanName, parseSong } from '@/lib/song';
+import { canEmbed, NOT_EMBEDDABLE } from '@/lib/embed';
 
 export async function POST(req: NextRequest) {
   if (!(await isAdmin())) return fail('Faça login no admin', 401);
@@ -74,8 +75,15 @@ export async function POST(req: NextRequest) {
   if (action === 'add') {
     const name = cleanName(body.name);
     if (!name) return fail('Digite o nome da pessoa');
-    const song = parseSong((body.song ?? {}) as Record<string, unknown>, await getSettings());
+    let settings;
+    try {
+      settings = await getSettings();
+    } catch {
+      return fail('Tente de novo em instantes', 503);
+    }
+    const song = parseSong((body.song ?? {}) as Record<string, unknown>, settings);
     if (typeof song === 'string') return fail(song);
+    if (!(await canEmbed(song.video_id))) return fail(NOT_EMBEDDABLE, 422);
     const { data: singer, error: e1 } = await sb
       .from('singers')
       .insert({ name, token_hash: hashToken(newSingerToken()), status: 'approved' })

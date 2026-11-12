@@ -8,7 +8,12 @@ export const dynamic = 'force-dynamic';
 /** Live (partial) ranking of the contest that is running. Only the admin sees it before the end. */
 export async function GET() {
   if (!(await isAdmin())) return fail('Faça login no admin', 401);
-  const settings = await getSettings();
+  let settings;
+  try {
+    settings = await getSettings();
+  } catch {
+    return fail('Tente de novo em instantes', 503);
+  }
   if (!settings.contest_id) return json({ contestId: null, standings: [] });
   const { data, error } = await db().rpc('contest_standings', { p_contest: settings.contest_id });
   if (error) return isMissingSchema(error) ? fail(NEEDS_MIGRATION, 409) : fail(error.message, 500);

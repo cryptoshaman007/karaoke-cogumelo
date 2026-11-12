@@ -11,8 +11,13 @@ export async function POST(req: NextRequest) {
   if (!name) return fail('Digite seu nome');
   // Generous on purpose: the whole bar shares one Wi-Fi address.
   const key = `join:${clientIp(req)}`;
-  if (await tooMany(key, 40, 10 * 60)) return fail('Muita gente entrando ao mesmo tempo. Tente em um minuto.', 429);
-  const settings = await getSettings();
+  if (await tooMany(key, 120, 10 * 60)) return fail('Muita gente entrando ao mesmo tempo. Tente em um minuto.', 429);
+  let settings;
+  try {
+    settings = await getSettings();
+  } catch {
+    return fail('Não foi possível entrar agora. Tente de novo.', 503);
+  }
   const token = newSingerToken();
   const { data, error } = await db()
     .from('singers')

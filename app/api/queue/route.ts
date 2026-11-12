@@ -3,6 +3,7 @@ import { db, getSettings } from '@/lib/supabase-server';
 import { singerFromRequest } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
 import { parseSong } from '@/lib/song';
+import { canEmbed, NOT_EMBEDDABLE } from '@/lib/embed';
 
 export async function POST(req: NextRequest) {
   let singer;
@@ -13,10 +14,16 @@ export async function POST(req: NextRequest) {
   }
   if (!singer) return fail('Entre com seu nome primeiro', 401);
   if (singer.status === 'blocked') return fail('Você não pode adicionar músicas', 403);
-  const settings = await getSettings();
+  let settings;
+  try {
+    settings = await getSettings();
+  } catch {
+    return fail('Tente de novo em instantes', 503);
+  }
   if (!settings.queue_open) return fail('A fila está fechada por hoje. Obrigado por cantar!', 403);
   const song = parseSong(await readBody(req), settings);
   if (typeof song === 'string') return fail(song);
+  if (!(await canEmbed(song.video_id))) return fail(NOT_EMBEDDABLE, 422);
   const { error } = await db()
     .from('queue')
     .insert({ singer_id: singer.id, ...song, position: Date.now() / 1000 });

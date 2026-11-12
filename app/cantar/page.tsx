@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
 import { del, get, post, useLive } from '@/lib/useLive';
+import { timeoutSignal } from '@/lib/timeout';
 import { REACTIONS, SCORE_EMOJIS, SCORE_LABELS, type QueueItem, type SearchResult, type Singer } from '@/lib/types';
 
 const TOKEN_KEY = 'karaoke_token';
@@ -39,7 +40,7 @@ export default function SingPage() {
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
       try {
-        const res = await fetch('/api/me', { headers: { 'x-singer-token': token }, cache: 'no-store' });
+        const res = await fetch('/api/me', { headers: { 'x-singer-token': token }, cache: 'no-store', signal: timeoutSignal(10000) });
         if (stop) return;
         if (res.status === 404) {
           writeToken(null);

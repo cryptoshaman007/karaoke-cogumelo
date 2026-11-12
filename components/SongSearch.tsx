@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon from './Icon';
 import { fmt } from '@/lib/useLive';
+import { timeoutSignal } from '@/lib/timeout';
 import type { PopularSong, SearchResult } from '@/lib/types';
 
 interface Props {
@@ -40,13 +41,15 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
     setBusy(true);
     setErr('');
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(term)}`, { headers: authHeaders });
+      const res = await fetch(`/api/search?q=${encodeURIComponent(term)}`, { headers: authHeaders, signal: timeoutSignal(24000) });
       const d = await res.json().catch(() => ({}));
       if (mine !== reqId.current) return;
       if (!res.ok) throw new Error(d.error ?? 'A busca falhou. Tente de novo.');
       setResults(d.results ?? []);
     } catch (e) {
-      if (mine === reqId.current) setErr((e as Error).message || 'A busca falhou. Tente de novo.');
+      const name = (e as Error).name;
+      const msg = name === 'TimeoutError' || name === 'AbortError' || e instanceof TypeError ? 'A busca demorou demais. Tente de novo.' : (e as Error).message;
+      if (mine === reqId.current) setErr(msg || 'A busca falhou. Tente de novo.');
     } finally {
       if (mine === reqId.current) setBusy(false);
     }

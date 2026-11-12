@@ -2,8 +2,9 @@
 import { useEffect, useRef, useState } from 'react';
 import QRCode from 'react-qr-code';
 import AdminLogin from '@/components/AdminLogin';
+import { useAdmin } from '@/lib/useAdmin';
 import Icon from '@/components/Icon';
-import { post, useLive } from '@/lib/useLive';
+import { post, useLive, type ApiError } from '@/lib/useLive';
 import { browserClient } from '@/lib/supabase-browser';
 import { fmtScore, REACTIONS, type QueueItem, type Settings } from '@/lib/types';
 
@@ -15,20 +16,42 @@ declare global {
   }
 }
 
+const YT_API = 'https://www.youtube.com/iframe_api';
+
+/** Loads the YouTube player script. Keeps trying if the internet is down at that moment. */
 function loadYT(): Promise<any> {
   return new Promise((resolve) => {
     if (window.YT?.Player) return resolve(window.YT);
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearInterval(poll);
+      resolve(window.YT);
+    };
     const prev = window.onYouTubeIframeAPIReady;
     window.onYouTubeIframeAPIReady = () => {
       prev?.();
-      resolve(window.YT);
+      finish();
     };
-    if (!document.getElementById('yt-api')) {
+    const inject = () => {
+      if (done) return;
+      document.getElementById('yt-api')?.remove();
+      // a half-loaded API would refuse to load again
+      if (window.YT && !window.YT.Player) window.YT = undefined;
       const s = document.createElement('script');
       s.id = 'yt-api';
-      s.src = 'https://www.youtube.com/iframe_api';
+      s.src = YT_API;
+      s.onerror = () => setTimeout(inject, 4000);
       document.head.appendChild(s);
-    }
+    };
+    let waited = 0;
+    const poll = setInterval(() => {
+      if (window.YT?.Player) return finish();
+      waited += 1;
+      if (waited % 20 === 0) inject(); // loaded nothing in 20 s: start over
+    }, 1000);
+    inject();
   });
 }
 
@@ -51,14 +74,24 @@ function writeProgress(p: { id: number; t: number } | null) {
 /** The video waits while the admin paused it or while contest results are on screen. */
 const onHold = (s: Settings | null) => !!s && (s.paused || s.results_contest_id != null);
 
+const isOnline = () => typeof navigator === 'undefined' || navigator.onLine !== false;
+
+// Watchdog timings (ms). The video is checked every TICK.
+const TICK = 3000;
+const RESUME_PAUSED_AFTER = 6000; // paused by a stray click on the video: play again
+const RELOAD_STALLED_AFTER = 30000; // was playing and froze: load it again at the same point
+// A video that never starts may just be showing an ad (the song's clock stays at zero meanwhile),
+// so these are generous: load it again a couple of times before giving up on it.
+const RELOAD_UNSTARTED_EVERY = 75000;
+const SKIP_UNSTARTED_AFTER = 240000;
+const MAX_DEAD_SKIPS = 2; // in a row. After that the problem is not the videos: stop skipping
+const PLAYER_READY_TIMEOUT = 20000;
+
+// Survives the screen being rebuilt after an error (same page, sound already allowed).
+let startedOnce = false;
+
 export default function TvPage() {
-  const [admin, setAdmin] = useState<boolean | null>(null);
-  useEffect(() => {
-    fetch('/api/admin/login')
-      .then((r) => r.json())
-      .then((d) => setAdmin(!!d.admin))
-      .catch(() => setAdmin(false));
-  }, []);
+  const [admin, setAdmin] = useAdmin();
   if (admin === null)
     return (
       <main className="center">
@@ -66,23 +99,29 @@ export default function TvPage() {
       </main>
     );
   if (!admin) return <AdminLogin title="Tela do projetor" onOk={() => setAdmin(true)} />;
-  return <Tv />;
+  return <Tv onLogout={() => setAdmin(false)} />;
 }
 
-function Tv() {
-  const { queue, singers, settings, results, loaded } = useLive();
-  const [started, setStarted] = useState(false);
+function Tv({ onLogout }: { onLogout: () => void }) {
+  const { queue, singers, settings, results, loaded, refresh } = useLive({ tv: true });
+  const [started, setStarted] = useState(startedOnce);
   const [showSettings, setShowSettings] = useState(false);
   const [origin, setOrigin] = useState('');
   const [intro, setIntro] = useState<{ id: number; left: number } | null>(null);
   const [notice, setNotice] = useState('');
   const [floaters, setFloaters] = useState<{ id: number; emoji: string; x: number; size: number; dur: number }[]>([]);
 
+  const holderRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
   const playerReady = useRef(false);
   const loadedVideo = useRef<number | null>(null); // queue id the player is on (or counting down to)
   const videoStarted = useRef(false); // false while the "next singer" countdown runs
   const advancing = useRef(false);
+  // an "end of song" the server did not confirm yet (e.g. the internet blinked): retried until it goes through
+  const pending = useRef<{ id: number; endStatus: 'done' | 'skipped' } | null>(null);
+  // health of the video on screen, for the watchdog
+  const health = useRef({ everPlayed: false, lastTime: 0, stalledMs: 0, reloads: 0, errors: 0 });
+  const deadSkips = useRef(0);
   const introTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -102,21 +141,33 @@ function Tv() {
   const loadedRef = useRef(loaded);
   loadedRef.current = loaded;
 
-  function flash(msg: string) {
+  /** Message over the video. `sticky` stays until something else replaces or clears it. */
+  function flash(msg: string, sticky = false) {
     setNotice(msg);
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
-    noticeTimer.current = setTimeout(() => setNotice(''), 6000);
+    noticeTimer.current = sticky || !msg ? null : setTimeout(() => setNotice(''), 6000);
   }
 
-  async function advance(endStatus: 'done' | 'skipped') {
-    if (advancing.current) return;
+  /**
+   * Asks the server to move the queue. `id` is the song this screen believes is playing (the
+   * server ignores the request if it is another one). Returns true when the server answered.
+   */
+  async function advance(endStatus: 'done' | 'skipped', id: number | null, retry = true): Promise<boolean> {
+    if (retry && id != null) pending.current = { id, endStatus };
+    if (advancing.current) return false;
     advancing.current = true;
     try {
-      await post('/api/player', { current: playingRef.current?.id ?? null, endStatus });
+      await post('/api/player', { current: id, endStatus });
+      if (pending.current?.id === id) pending.current = null;
+      void refresh();
+      return true;
     } catch (e) {
       console.error(e);
+      // logged out (password changed, cookies cleared): without this the queue would stop silently
+      if ((e as ApiError).status === 401) onLogout();
+      return false;
     } finally {
-      setTimeout(() => (advancing.current = false), 1500);
+      setTimeout(() => (advancing.current = false), 1000);
     }
   }
 
@@ -130,8 +181,21 @@ function Tv() {
     const p = playerRef.current;
     if (!p || loadedVideo.current !== item.id) return;
     videoStarted.current = true;
+    health.current = { everPlayed: false, lastTime: startSeconds, stalledMs: 0, reloads: 0, errors: 0 };
     p.setVolume?.(settingsRef.current?.volume ?? 100);
-    p.loadVideoById({ videoId: item.video_id, startSeconds });
+    // on hold (paused, or contest results on screen): get it ready without a burst of sound
+    if (onHold(settingsRef.current) && p.cueVideoById) p.cueVideoById({ videoId: item.video_id, startSeconds });
+    else p.loadVideoById({ videoId: item.video_id, startSeconds });
+  }
+
+  /** Loads the current video again, from where it was. Used when it froze or never started. */
+  function reloadVideo() {
+    const p = playerRef.current;
+    const cur = playingRef.current;
+    if (!p || !playerReady.current || !cur || !videoStarted.current || loadedVideo.current !== cur.id) return;
+    const h = health.current;
+    h.reloads += 1;
+    p.loadVideoById({ videoId: cur.video_id, startSeconds: h.lastTime > 3 ? Math.floor(h.lastTime) : 0 });
   }
 
   function syncPlayer() {
@@ -160,53 +224,101 @@ function Tv() {
     const wait = resumeAt > 0 ? 0 : settingsRef.current?.intermission_sec ?? 8;
     if (wait <= 0) return startVideo(cur, resumeAt);
 
-    let left = wait;
-    setIntro({ id: cur.id, left });
+    // counts against the clock, so a throttled timer never stretches the countdown
+    const endAt = Date.now() + wait * 1000;
+    setIntro({ id: cur.id, left: wait });
     introTimer.current = setInterval(() => {
-      left -= 1;
-      if (left > 0) return setIntro({ id: cur.id, left });
+      const left = Math.ceil((endAt - Date.now()) / 1000);
+      if (left > 0) return setIntro((i) => (i && i.id === cur.id && i.left === left ? i : { id: cur.id, left }));
       clearIntro();
       startVideo(cur, 0);
-    }, 1000);
+    }, 250);
   }
 
   // create the player once the user has clicked "start" (needed so the browser allows sound)
   useEffect(() => {
     if (!started) return;
+    startedOnce = true;
     let cancelled = false;
-    loadYT().then((YT) => {
+    let readyTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const build = (YT: any) => {
       if (cancelled) return;
-      playerRef.current = new YT.Player('yt-player', {
-        width: '100%',
-        height: '100%',
-        playerVars: { autoplay: 1, controls: 0, rel: 0, modestbranding: 1, playsinline: 1, iv_load_policy: 3, fs: 0, disablekb: 1 },
-        events: {
-          onReady: () => {
-            playerReady.current = true;
-            loadedVideo.current = null;
-            syncPlayer();
-          },
-          onStateChange: (e: any) => {
-            if (e.data === YT.PlayerState.ENDED && videoStarted.current) {
+      const holder = holderRef.current;
+      if (!holder) return;
+      playerReady.current = false;
+      loadedVideo.current = null;
+      videoStarted.current = false;
+      try {
+        playerRef.current?.destroy?.();
+      } catch {}
+      playerRef.current = null;
+      // React never touches what is inside the holder, so the player can be rebuilt at will
+      holder.innerHTML = '';
+      const el = document.createElement('div');
+      holder.appendChild(el);
+      try {
+        playerRef.current = new YT.Player(el, {
+          width: '100%',
+          height: '100%',
+          playerVars: { autoplay: 1, controls: 0, rel: 0, modestbranding: 1, playsinline: 1, iv_load_policy: 3, fs: 0, disablekb: 1 },
+          events: {
+            onReady: () => {
+              if (cancelled) return;
+              playerReady.current = true;
+              loadedVideo.current = null;
+              flash('');
+              syncPlayer();
+            },
+            onStateChange: (e: any) => {
+              // admin paused from the phone while the video was still loading
+              if (e.data === YT.PlayerState.PLAYING && onHold(settingsRef.current)) playerRef.current?.pauseVideo?.();
+              if (e.data === YT.PlayerState.ENDED && videoStarted.current && loadedVideo.current != null) {
+                writeProgress(null);
+                void advance('done', loadedVideo.current);
+              }
+            },
+            onError: (e: any) => {
+              if (!videoStarted.current || loadedVideo.current == null) return;
+              // the internet dropped: not the video's fault. The watchdog loads it again later.
+              if (!isOnline()) return;
+              const h = health.current;
+              h.errors += 1;
+              // 2 = invalid id, 100 = removed/private, 101/150 = owner blocked embedding: no point retrying.
+              // Anything else (5 = player hiccup) gets one more chance first.
+              const fatal = [2, 100, 101, 150].includes(Number(e?.data));
+              if (!fatal && h.errors <= 1) return void setTimeout(reloadVideo, 1500);
+              flash('Este vídeo não pôde ser tocado. Passando para o próximo.');
               writeProgress(null);
-              advance('done');
-            }
-            // admin paused from the phone while the video was still loading
-            if (e.data === YT.PlayerState.PLAYING && onHold(settingsRef.current)) playerRef.current?.pauseVideo?.();
+              void advance('skipped', loadedVideo.current);
+            },
           },
-          onError: () => {
-            // video blocked for embedding, removed, etc.
-            if (!videoStarted.current) return;
-            flash('Este vídeo não pôde ser tocado. Passando para o próximo.');
-            writeProgress(null);
-            advance('skipped');
-          },
-        },
-      });
-    });
+        });
+      } catch (err) {
+        console.error('player failed to start', err);
+      }
+      // the player frame did not load (internet down?): throw it away and build another
+      readyTimer = setTimeout(() => {
+        if (cancelled || playerReady.current) return;
+        flash('Conectando ao YouTube… Confira a internet do computador.', true);
+        build(YT);
+      }, PLAYER_READY_TIMEOUT);
+    };
+
+    loadYT().then(build);
     return () => {
       cancelled = true;
+      clearTimeout(readyTimer);
       if (introTimer.current) clearInterval(introTimer.current);
+      introTimer.current = null;
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
+      try {
+        playerRef.current?.destroy?.();
+      } catch {}
+      playerRef.current = null;
+      playerReady.current = false;
+      loadedVideo.current = null;
+      videoStarted.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started]);
@@ -214,8 +326,9 @@ function Tv() {
   // react to queue changes
   useEffect(() => {
     if (!started || !loaded) return;
+    if (pending.current && pending.current.id !== playing?.id) pending.current = null;
     syncPlayer();
-    if (!playing && waiting.length > 0) advance('done');
+    if (!playing && waiting.length > 0) void advance('done', null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started, loaded, playing?.id, waiting.length]);
 
@@ -252,7 +365,7 @@ function Tv() {
       })
       .subscribe();
     return () => {
-      sb.removeChannel(ch);
+      sb.removeChannel(ch).catch(() => {});
       timers.forEach(clearTimeout);
       setFloaters([]);
     };
@@ -273,29 +386,98 @@ function Tv() {
     const p = playerRef.current;
     if (!p || !playerReady.current || !videoStarted.current) return;
     writeProgress(null);
+    health.current.lastTime = 0;
+    health.current.stalledMs = 0;
     p.seekTo?.(0, true);
     p.playVideo?.();
   }, [settings?.restart_at, settings]);
 
-  // every few seconds: save progress, enforce the time limit, and un-stick the queue if needed
+  // Watchdog. Every few seconds: save progress, enforce the time limit, and get the karaoke moving
+  // again by itself if anything is stuck (lost request, frozen video, video that never started).
   useEffect(() => {
     if (!started) return;
     const t = setInterval(() => {
       if (!loadedRef.current) return;
       const cur = playingRef.current;
+
+      // the server never confirmed the end of this song: ask again
+      const pend = pending.current;
+      if (pend) {
+        if (cur?.id === pend.id) return void advance(pend.endStatus, pend.id);
+        pending.current = null;
+      }
       if (!cur) {
         // someone is waiting but nothing is playing (e.g. a request was lost): try again
-        if (waitingRef.current > 0) advance('done');
+        if (waitingRef.current > 0) void advance('done', null);
         return;
       }
       const p = playerRef.current;
-      if (!p?.getCurrentTime || !videoStarted.current || loadedVideo.current !== cur.id) return;
-      const time = p.getCurrentTime();
+      if (!p?.getCurrentTime || !playerReady.current || !videoStarted.current || loadedVideo.current !== cur.id) return;
+      const time = Number(p.getCurrentTime()) || 0;
+      const state: number | undefined = p.getPlayerState?.();
       const max = settingsRef.current?.max_duration_sec ?? 360;
-      if (time > max + 15) return void advance('done');
-      if (p.getPlayerState?.() === 1) writeProgress({ id: cur.id, t: time });
-    }, 3000);
-    return () => clearInterval(t);
+      if (time > max + 15) return void advance('done', cur.id);
+      // finished, but the "ended" event was lost
+      if (state === 0) return void advance('done', cur.id);
+
+      const h = health.current;
+      if (state === 1 && Math.abs(time - h.lastTime) > 0.2) {
+        // moving: all good
+        h.lastTime = time;
+        h.stalledMs = 0;
+        h.everPlayed = true;
+        if (deadSkips.current > 0) flash('');
+        deadSkips.current = 0;
+        writeProgress({ id: cur.id, t: time });
+        return;
+      }
+      if (onHold(settingsRef.current)) return void (h.stalledMs = 0); // stopped on purpose
+      if (!isOnline()) return; // no network at all: wait for it, never punish the singer
+      h.stalledMs += TICK;
+
+      if (state === 2) {
+        // someone clicked the video and paused it by accident
+        if (h.stalledMs >= RESUME_PAUSED_AFTER) p.playVideo?.();
+        return;
+      }
+      if (h.everPlayed) {
+        // froze in the middle (internet blinked): load it again at the same point, never skip
+        if (h.stalledMs >= RELOAD_STALLED_AFTER) {
+          h.stalledMs = 0;
+          reloadVideo();
+        }
+        return;
+      }
+      // never started
+      if (h.stalledMs >= SKIP_UNSTARTED_AFTER) {
+        h.stalledMs = 0;
+        h.reloads = 0;
+        if (deadSkips.current >= MAX_DEAD_SKIPS) {
+          // several in a row: the problem is the connection, not the songs. Keep trying this one.
+          flash('O vídeo não está carregando. Confira a internet do computador.', true);
+          return reloadVideo();
+        }
+        flash('Este vídeo não carregou. Passando para o próximo.');
+        void advance('skipped', cur.id, false).then((ok) => {
+          if (ok) deadSkips.current += 1;
+          else reloadVideo(); // server unreachable too: it is the internet, give the song another chance
+        });
+        return;
+      }
+      if (h.stalledMs >= RELOAD_UNSTARTED_EVERY * (h.reloads + 1)) reloadVideo();
+    }, TICK);
+
+    // internet is back: do not wait for the watchdog
+    const onOnline = () => {
+      const p = playerRef.current;
+      if (!p || !videoStarted.current || onHold(settingsRef.current)) return;
+      if (p.getPlayerState?.() !== 1) setTimeout(reloadVideo, 1500);
+    };
+    window.addEventListener('online', onOnline);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('online', onOnline);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started]);
 
@@ -328,7 +510,7 @@ function Tv() {
     <main className="tv">
       <section className="stage">
         <div className={showVideo ? 'player-wrap' : 'player-wrap hidden'}>
-          <div id="yt-player" />
+          <div className="yt-holder" ref={holderRef} />
         </div>
 
         {!playing && (
@@ -490,7 +672,7 @@ function Tv() {
               </div>
             )}
             <div className="row">
-              <button className="btn" onClick={() => advance('skipped')} disabled={!playing}>
+              <button className="btn" onClick={() => advance('skipped', playing?.id ?? null)} disabled={!playing}>
                 <Icon name="skip" /> Pular música
               </button>
               <button

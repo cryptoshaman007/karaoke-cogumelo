@@ -1,20 +1,15 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import AdminLogin from '@/components/AdminLogin';
+import { useAdmin } from '@/lib/useAdmin';
 import Icon from '@/components/Icon';
 import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
-import { fmt, get, post, useLive } from '@/lib/useLive';
+import { fmt, get, post, useLive, type ApiError } from '@/lib/useLive';
 import type { SearchResult, Standing } from '@/lib/types';
 
 export default function AdminPage() {
-  const [admin, setAdmin] = useState<boolean | null>(null);
-  useEffect(() => {
-    fetch('/api/admin/login')
-      .then((r) => r.json())
-      .then((d) => setAdmin(!!d.admin))
-      .catch(() => setAdmin(false));
-  }, []);
+  const [admin, setAdmin] = useAdmin();
   if (admin === null)
     return (
       <main className="center">
@@ -77,7 +72,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
     } catch (e) {
       const msg = (e as Error).message;
       setErr(msg);
-      if (msg.includes('login')) onLogout();
+      if ((e as ApiError).status === 401) onLogout();
       return false;
     } finally {
       setBusy(false);

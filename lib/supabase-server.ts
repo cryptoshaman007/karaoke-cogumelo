@@ -1,6 +1,7 @@
 import 'server-only';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { normalizeSettings, type Settings } from './types';
+import { fetchWithTimeout } from './timeout';
 
 let client: SupabaseClient | null = null;
 
@@ -10,7 +11,7 @@ export function db(): SupabaseClient {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.SUPABASE_SECRET_KEY;
     if (!url || !key) throw new Error('Faltam NEXT_PUBLIC_SUPABASE_URL ou SUPABASE_SECRET_KEY');
-    client = createClient(url, key, { auth: { persistSession: false } });
+    client = createClient(url, key, { auth: { persistSession: false }, global: { fetch: fetchWithTimeout(8000) } });
   }
   return client;
 }
