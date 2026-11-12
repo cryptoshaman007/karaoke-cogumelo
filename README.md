@@ -6,9 +6,9 @@ App web de karaokê para o bar. O cliente escaneia o QR code, digita o nome, bus
 
 | Endereço | Quem usa | O que faz |
 |---|---|---|
-| `/` | PC do projetor | Vídeo grande, fila e QR para cantar. Pede a senha do admin uma vez. A engrenagem ⚙ (canto inferior direito, quase invisível) mostra o QR do admin. |
-| `/cantar` | Celular do cliente | Nome, busca, entrar na fila, ver a posição. |
-| `/admin` | Celular do admin | Aprovar/recusar, pular, reordenar, limpar fila, limite de minutos, ligar/desligar aprovação. |
+| `/` | PC do projetor | Vídeo grande, fila e QR para cantar. Antes de cada música mostra "Agora é a vez de…" com contagem. Pede a senha do admin uma vez. A engrenagem (canto inferior direito, quase invisível) mostra o QR do admin. |
+| `/cantar` | Celular do cliente | Nome, busca, músicas mais cantadas, entrar na fila, ver a fila ao vivo, posição e tempo estimado de espera. O celular vibra quando chega a vez. |
+| `/admin` | Celular do admin | Aprovar/recusar, pausar, reiniciar, pular, volume, reordenar, tocar em seguida, colocar alguém na fila, abrir/fechar a fila, recado no telão, limite de minutos, ligar/desligar aprovação. |
 
 A fila fica salva no Supabase, então fechar o navegador ou desligar o PC não perde nada.
 
@@ -41,6 +41,13 @@ A fila fica salva no Supabase, então fechar o navegador ou desligar o PC não p
 - Busca: `youtubei.js` (sem chave e sem cota, mas não oficial). Fica isolada em `lib/youtube.ts` para trocar pela YouTube Data API se precisar.
 - Segurança: o navegador só **lê** o banco. Toda escrita passa pelas rotas `/api/*` com a chave secreta. Cada cliente recebe um token salvo no celular.
 - Regras no banco: uma música ativa por pessoa, uma tocando por vez, e a função `advance_queue` avança a fila com trava para evitar pulo duplo.
+- O celular do cliente lê a fila direto do Supabase (Realtime), sem ficar chamando o servidor da Vercel.
+- O telão guarda o ponto da música: se a página recarregar ou o PC reiniciar, continua de onde parou.
+- Limite de tentativas no login do admin (8 erros em 15 min), nas entradas e nas buscas, guardado na tabela `rate_events`.
+
+## Banco de dados
+
+`supabase/schema.sql` cria o banco do zero. Depois rode, em ordem, os arquivos de `supabase/migrations/` (SQL Editor do Supabase). As migrações só adicionam coisas; o app funciona sem elas, mas as funções novas do admin (pausar, volume, recado, fila aberta/fechada) avisam que precisam da atualização.
 
 ## Rodar localmente
 

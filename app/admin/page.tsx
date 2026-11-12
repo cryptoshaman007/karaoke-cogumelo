@@ -1,37 +1,94 @@
 'use client';
-import { useEffect, useState } from 'react';
-import AdminLogin from '../AdminLogin';
+import { useEffect, useRef, useState } from 'react';
+import AdminLogin from '@/components/AdminLogin';
+import Icon from '@/components/Icon';
+import SongSearch from '@/components/SongSearch';
 import { fmt, post, useLive } from '@/lib/useLive';
+import type { SearchResult } from '@/lib/types';
 
 export default function AdminPage() {
   const [admin, setAdmin] = useState<boolean | null>(null);
   useEffect(() => {
-    fetch('/api/admin/login').then((r) => r.json()).then((d) => setAdmin(!!d.admin)).catch(() => setAdmin(false));
+    fetch('/api/admin/login')
+      .then((r) => r.json())
+      .then((d) => setAdmin(!!d.admin))
+      .catch(() => setAdmin(false));
   }, []);
-  if (admin === null) return <main className="center">Carregando…</main>;
-  if (!admin) return <AdminLogin title="Admin do karaokê" onOk={() => setAdmin(true)} />;
+  if (admin === null)
+    return (
+      <main className="center">
+        <span className="spinner big" aria-label="Carregando" />
+      </main>
+    );
+  if (!admin) return <AdminLogin title="Painel do admin" onOk={() => setAdmin(true)} />;
   return <Panel onLogout={() => setAdmin(false)} />;
 }
 
 function Panel({ onLogout }: { onLogout: () => void }) {
-  const { queue, singers, settings, refresh } = useLive();
+  const { queue, singers, settings, loaded, refresh } = useLive({ admin: true });
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
   const [minutes, setMinutes] = useState('');
+  const [gap, setGap] = useState('');
+  const [message, setMessage] = useState('');
+  const [volume, setVolume] = useState<number | null>(null);
+  const [addName, setAddName] = useState('');
+  const [added, setAdded] = useState('');
+  const filled = useRef(false);
+  const volTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // fill the form once with what is saved
   useEffect(() => {
-    if (settings && minutes === '') setMinutes(String(settings.max_duration_sec / 60));
-  }, [settings, minutes]);
+    if (!settings || filled.current) return;
+    filled.current = true;
+    setMinutes(String(settings.max_duration_sec / 60));
+    setGap(String(settings.intermission_sec));
+    setMessage(settings.tv_message);
+  }, [settings]);
 
   async function act(url: string, body: unknown) {
     setErr('');
+    setBusy(true);
     try {
       await post(url, body);
-      refresh();
+      await refresh();
+      return true;
     } catch (e) {
-      setErr((e as Error).message);
-      if ((e as Error).message.includes('login')) onLogout();
+      const msg = (e as Error).message;
+      setErr(msg);
+      if (msg.includes('login')) onLogout();
+      return false;
+    } finally {
+      setBusy(false);
     }
   }
+  const setting = (body: unknown) => act('/api/admin/settings', body);
+  const queueAct = (body: unknown) => act('/api/admin/queue', body);
+
+  function changeVolume(v: number) {
+    setVolume(v);
+    if (volTimer.current) clearTimeout(volTimer.current);
+    volTimer.current = setTimeout(async () => {
+      await setting({ volume: v });
+      setVolume(null);
+    }, 350);
+  }
+
+  async function addForSomeone(song: SearchResult) {
+    const name = addName.trim();
+    if (!name) throw new Error('Digite o nome da pessoa primeiro');
+    await post('/api/admin/queue', { action: 'add', name, song });
+    setAdded(`${name} entrou na fila.`);
+    setAddName('');
+    await refresh();
+  }
+
+  if (!loaded || !settings)
+    return (
+      <main className="center">
+        <span className="spinner big" aria-label="Carregando" />
+      </main>
+    );
 
   const playing = queue.find((q) => q.status === 'playing');
   const waiting = queue.filter((q) => q.status === 'waiting');
@@ -39,136 +96,247 @@ function Panel({ onLogout }: { onLogout: () => void }) {
   const pending = all.filter((s) => s.status === 'pending');
   const blocked = all.filter((s) => s.status === 'blocked');
   const songOf = (singerId: string) => waiting.find((q) => q.singer_id === singerId);
+  const vol = volume ?? settings.volume;
 
   return (
     <main className="phone admin">
-      <header>
-        <h1>🍄 Admin</h1>
-        <button className="btn small" onClick={async () => (await post('/api/admin/logout', {}), onLogout())}>
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark">🍄</span>
+          <strong>Admin</strong>
+        </div>
+        <button className="btn ghost small" onClick={async () => (await post('/api/admin/logout', {}).catch(() => {}), onLogout())}>
           Sair
         </button>
       </header>
-      {err && <p className="error">{err}</p>}
+      {err && <p className="banner danger" role="alert">{err}</p>}
 
-      <section className="card">
-        <h2>Aguardando aprovação ({pending.length})</h2>
-        {pending.length === 0 && <p className="muted">Ninguém esperando.</p>}
-        <ul className="rows">
-          {pending.map((s) => (
-            <li key={s.id}>
-              <div>
-                <strong>{s.name}</strong>
-                <span className="muted small">{songOf(s.id)?.title ?? 'ainda sem música'}</span>
-              </div>
-              <button className="btn primary" onClick={() => act('/api/admin/singers', { id: s.id, status: 'approved' })}>
-                Aprovar
-              </button>
-              <button className="btn danger" onClick={() => act('/api/admin/singers', { id: s.id, status: 'blocked' })}>
-                Recusar
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="card">
-        <h2>Tocando agora</h2>
-        {playing ? (
+      {pending.length > 0 && (
+        <section className="card attention">
+          <h2>
+            Aguardando aprovação <span className="count-pill">{pending.length}</span>
+          </h2>
           <ul className="rows">
-            <li>
-              <div>
-                <strong>{singers[playing.singer_id]?.name}</strong>
-                <span className="muted small">
-                  {playing.title} · {fmt(playing.duration_sec)}
-                </span>
-              </div>
-              <button className="btn" onClick={() => act('/api/admin/queue', { action: 'skip', id: playing.id })}>
-                ⏭ Pular
-              </button>
-            </li>
-          </ul>
-        ) : (
-          <p className="muted">Nada tocando.</p>
-        )}
-      </section>
-
-      <section className="card">
-        <h2>Fila ({waiting.length})</h2>
-        <ul className="rows">
-          {waiting.map((q, i) => {
-            const s = singers[q.singer_id];
-            return (
-              <li key={q.id} className={s?.status !== 'approved' ? 'dim' : ''}>
-                <div>
-                  <strong>
-                    {i + 1}. {s?.name} {s?.status === 'pending' && <em>(aguardando)</em>}
-                  </strong>
-                  <span className="muted small">
-                    {q.title} · {fmt(q.duration_sec)}
-                  </span>
+            {pending.map((s) => (
+              <li key={s.id}>
+                <div className="grow">
+                  <strong>{s.name}</strong>
+                  <span className="muted small">{songOf(s.id)?.title ?? 'ainda sem música'}</span>
                 </div>
-                <button className="btn small" disabled={i === 0} onClick={() => act('/api/admin/queue', { action: 'up', id: q.id })}>
-                  ▲
+                <button className="btn primary small" disabled={busy} onClick={() => act('/api/admin/singers', { id: s.id, status: 'approved' })}>
+                  <Icon name="check" /> Aprovar
                 </button>
                 <button
-                  className="btn small"
-                  disabled={i === waiting.length - 1}
-                  onClick={() => act('/api/admin/queue', { action: 'down', id: q.id })}
+                  className="btn danger small icon-only"
+                  aria-label={`Recusar ${s.name}`}
+                  disabled={busy}
+                  onClick={() => act('/api/admin/singers', { id: s.id, status: 'blocked' })}
                 >
-                  ▼
-                </button>
-                <button className="btn small danger" onClick={() => act('/api/admin/queue', { action: 'remove', id: q.id })}>
-                  ✕
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-        {waiting.length > 0 && (
-          <button
-            className="btn danger"
-            onClick={() => confirm('Limpar a fila inteira?') && act('/api/admin/queue', { action: 'clear' })}
-          >
-            Limpar fila
-          </button>
-        )}
-      </section>
-
-      <section className="card">
-        <h2>Configurações</h2>
-        <label className="field">
-          Duração máxima da música (minutos)
-          <div className="row">
-            <input type="number" min={1} max={30} step={0.5} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
-            <button className="btn primary" onClick={() => act('/api/admin/settings', { maxDurationMin: Number(minutes) })}>
-              Salvar
-            </button>
-          </div>
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={settings?.require_approval ?? true}
-            onChange={(e) => act('/api/admin/settings', { requireApproval: e.target.checked })}
-          />
-          Pedir aprovação para pessoas novas
-        </label>
-      </section>
-
-      {blocked.length > 0 && (
-        <section className="card">
-          <h2>Recusados ({blocked.length})</h2>
-          <ul className="rows">
-            {blocked.map((s) => (
-              <li key={s.id}>
-                <strong>{s.name}</strong>
-                <button className="btn" onClick={() => act('/api/admin/singers', { id: s.id, status: 'approved' })}>
-                  Liberar
+                  <Icon name="close" />
                 </button>
               </li>
             ))}
           </ul>
         </section>
+      )}
+
+      <section className="card">
+        <h2>Tocando agora</h2>
+        {playing ? (
+          <>
+            <div className="nowrow">
+              {playing.thumbnail && <img src={playing.thumbnail} alt="" width={96} height={54} />}
+              <div className="grow">
+                <strong>{singers[playing.singer_id]?.name}</strong>
+                <span className="muted small">
+                  {playing.title} · {fmt(playing.duration_sec)}
+                </span>
+              </div>
+            </div>
+            <div className="controls">
+              <button className="btn" disabled={busy} onClick={() => setting({ paused: !settings.paused })}>
+                <Icon name={settings.paused ? 'play' : 'pause'} /> {settings.paused ? 'Continuar' : 'Pausar'}
+              </button>
+              <button className="btn" disabled={busy} onClick={() => setting({ restart: true })}>
+                <Icon name="restart" /> Reiniciar
+              </button>
+              <button className="btn" disabled={busy} onClick={() => queueAct({ action: 'skip', id: playing.id })}>
+                <Icon name="skip" /> Pular
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="muted">Nada tocando.</p>
+        )}
+        <label className="slider">
+          <Icon name="volume" />
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={vol}
+            aria-label="Volume do telão"
+            onChange={(e) => changeVolume(Number(e.target.value))}
+          />
+          <span className="muted small">{vol}%</span>
+        </label>
+      </section>
+
+      <section className="card">
+        <h2>
+          Fila <span className="count-pill muted-pill">{waiting.length}</span>
+        </h2>
+        {waiting.length === 0 && <p className="muted">Ninguém na fila.</p>}
+        <ul className="rows">
+          {waiting.map((q, i) => {
+            const s = singers[q.singer_id];
+            return (
+              <li key={q.id} className={s?.status !== 'approved' ? 'qrow dim' : 'qrow'}>
+                <span className="pos">{i + 1}</span>
+                <div className="grow">
+                  <strong>
+                    {s?.name ?? '…'} {s?.status === 'pending' && <em className="tag">aguardando</em>}
+                  </strong>
+                  <span className="muted small">
+                    {q.title} · {fmt(q.duration_sec)}
+                  </span>
+                </div>
+                <div className="rowbtns">
+                  <button
+                    className="btn small icon-only"
+                    aria-label="Tocar em seguida"
+                    title="Tocar em seguida"
+                    disabled={busy || i === 0}
+                    onClick={() => queueAct({ action: 'top', id: q.id })}
+                  >
+                    <Icon name="top" />
+                  </button>
+                  <button
+                    className="btn small icon-only"
+                    aria-label="Subir"
+                    disabled={busy || i === 0}
+                    onClick={() => queueAct({ action: 'up', id: q.id })}
+                  >
+                    <Icon name="up" />
+                  </button>
+                  <button
+                    className="btn small icon-only"
+                    aria-label="Descer"
+                    disabled={busy || i === waiting.length - 1}
+                    onClick={() => queueAct({ action: 'down', id: q.id })}
+                  >
+                    <Icon name="down" />
+                  </button>
+                  <button
+                    className="btn small icon-only danger"
+                    aria-label="Tirar da fila"
+                    disabled={busy}
+                    onClick={() => queueAct({ action: 'remove', id: q.id })}
+                  >
+                    <Icon name="close" />
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+        {waiting.length > 1 && (
+          <button className="btn danger small self-start" onClick={() => confirm('Limpar a fila inteira?') && queueAct({ action: 'clear' })}>
+            Limpar fila
+          </button>
+        )}
+      </section>
+
+      <details className="card fold">
+        <summary>
+          <div className="grow">
+            <h2>Colocar alguém na fila</h2>
+            <span className="muted small">Para quem está sem celular</span>
+          </div>
+        </summary>
+        <label className="field">
+          <span>Nome da pessoa</span>
+          <input
+            placeholder="Nome"
+            maxLength={40}
+            value={addName}
+            onChange={(e) => (setAddName(e.target.value), setAdded(''))}
+          />
+        </label>
+        {added && <p className="ok">{added}</p>}
+        <SongSearch maxDurationSec={settings.max_duration_sec} pickLabel="Adicionar" onPick={addForSomeone} />
+      </details>
+
+      <section className="card">
+        <h2>Configurações</h2>
+        <label className="switch">
+          <input type="checkbox" checked={settings.queue_open} onChange={(e) => setting({ queueOpen: e.target.checked })} />
+          <span>
+            <strong>Fila aberta</strong>
+            <span className="muted small">Desligue no fim da noite para ninguém mais entrar.</span>
+          </span>
+        </label>
+        <label className="switch">
+          <input type="checkbox" checked={settings.require_approval} onChange={(e) => setting({ requireApproval: e.target.checked })} />
+          <span>
+            <strong>Aprovar pessoas novas</strong>
+            <span className="muted small">Quem já foi aprovado uma vez não precisa de novo.</span>
+          </span>
+        </label>
+        <div className="field">
+          <span>Duração máxima da música (minutos)</span>
+          <div className="row">
+            <input type="number" inputMode="decimal" min={1} max={30} step={0.5} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+            <button className="btn" disabled={busy || minutes === ''} onClick={() => setting({ maxDurationMin: Number(minutes) })}>
+              Salvar
+            </button>
+          </div>
+        </div>
+        <div className="field">
+          <span>Tempo de “próximo cantor” no telão (segundos)</span>
+          <div className="row">
+            <input type="number" inputMode="numeric" min={0} max={30} step={1} value={gap} onChange={(e) => setGap(e.target.value)} />
+            <button className="btn" disabled={busy || gap === ''} onClick={() => setting({ intermissionSec: Number(gap) })}>
+              Salvar
+            </button>
+          </div>
+        </div>
+        <div className="field">
+          <span>Recado no telão</span>
+          <div className="row">
+            <input
+              className="wide"
+              placeholder="Ex.: Caipirinha em dobro até 22h"
+              maxLength={140}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+            />
+            <button className="btn" disabled={busy} onClick={() => setting({ tvMessage: message })}>
+              Salvar
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {blocked.length > 0 && (
+        <details className="card fold">
+          <summary>
+            <h2>
+              Recusados <span className="count-pill muted-pill">{blocked.length}</span>
+            </h2>
+          </summary>
+          <ul className="rows">
+            {blocked.map((s) => (
+              <li key={s.id}>
+                <strong className="grow">{s.name}</strong>
+                <button className="btn small" disabled={busy} onClick={() => act('/api/admin/singers', { id: s.id, status: 'approved' })}>
+                  Liberar
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </main>
   );

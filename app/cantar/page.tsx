@@ -1,7 +1,8 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
-import { fmt, post } from '@/lib/useLive';
-import type { SearchResult } from '@/lib/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import SongSearch from '@/components/SongSearch';
+import { del, post, useLive } from '@/lib/useLive';
+import type { SearchResult, Singer } from '@/lib/types';
 
 const TOKEN_KEY = 'karaoke_token';
 
@@ -19,69 +20,69 @@ function writeToken(t: string | null) {
   } catch {}
 }
 
-interface Me {
-  singer: { id: string; name: string; status: 'pending' | 'approved' | 'blocked' };
-  entry: { id: number; title: string; thumbnail: string | null; status: 'waiting' | 'playing' } | null;
-  ahead: number | null;
-  maxDurationSec: number;
-}
-
 export default function SingPage() {
   const [token, setToken] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
-  const [me, setMe] = useState<Me | null>(null);
+  const [me, setMe] = useState<Singer | null>(null);
 
   useEffect(() => {
     setToken(readToken());
     setReady(true);
   }, []);
 
-  const loadMe = useCallback(async () => {
-    if (!token) return;
-    const res = await fetch('/api/me', { headers: { 'x-singer-token': token }, cache: 'no-store' });
-    if (res.status === 404) {
-      writeToken(null);
-      setToken(null);
-      setMe(null);
-      return;
-    }
-    if (res.ok) setMe(await res.json());
-  }, [token]);
-
+  // Ask the server who this phone is. Retries on network trouble; only forgets the token
+  // when the server says for sure that it does not exist.
   useEffect(() => {
-    if (!token) return;
-    loadMe();
-    const t = setInterval(loadMe, 4000);
-    return () => clearInterval(t);
-  }, [token, loadMe]);
+    if (!token || me) return;
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/me', { headers: { 'x-singer-token': token }, cache: 'no-store' });
+        if (stop) return;
+        if (res.status === 404) {
+          writeToken(null);
+          setToken(null);
+          return;
+        }
+        if (res.ok) {
+          setMe((await res.json()).singer);
+          return;
+        }
+      } catch {}
+      if (!stop) timer = setTimeout(load, 3000);
+    };
+    load();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, [token, me]);
 
-  if (!ready) return <main className="center">Carregando…</main>;
-  if (!token) return <Join onJoined={(t) => (writeToken(t), setToken(t))} />;
-  if (!me) return <main className="center">Carregando…</main>;
+  if (!ready) return <Loading />;
+  if (!token)
+    return (
+      <Join
+        onJoined={(t, singer) => {
+          writeToken(t);
+          setMe(singer);
+          setToken(t);
+        }}
+      />
+    );
+  if (!me) return <Loading />;
+  return <Room me={me} token={token} />;
+}
 
+function Loading() {
   return (
-    <main className="phone">
-      <header>
-        <h1>🍄 Karaokê</h1>
-        <span className="muted">Olá, {me.singer.name}!</span>
-      </header>
-
-      {me.singer.status === 'blocked' && <p className="card error">O admin não liberou você para cantar hoje.</p>}
-      {me.singer.status === 'pending' && (
-        <p className="card notice">⏳ Aguardando o admin aprovar sua entrada. Você já pode escolher a música!</p>
-      )}
-
-      {me.singer.status !== 'blocked' &&
-        (me.entry ? (
-          <MySong me={me} token={token} onChange={loadMe} />
-        ) : (
-          <Search token={token} maxDurationSec={me.maxDurationSec} onAdded={loadMe} />
-        ))}
+    <main className="center">
+      <span className="spinner big" aria-label="Carregando" />
     </main>
   );
 }
 
-function Join({ onJoined }: { onJoined: (token: string) => void }) {
+function Join({ onJoined }: { onJoined: (token: string, singer: Singer) => void }) {
   const [name, setName] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -95,7 +96,7 @@ function Join({ onJoined }: { onJoined: (token: string) => void }) {
           setErr('');
           try {
             const d = await post('/api/join', { name });
-            onJoined(d.token);
+            onJoined(d.token, d.singer);
           } catch (e) {
             setErr((e as Error).message);
           } finally {
@@ -103,113 +104,197 @@ function Join({ onJoined }: { onJoined: (token: string) => void }) {
           }
         }}
       >
-        <h1>🍄 Karaokê Cogumelo</h1>
-        <p>Como devemos te chamar no telão?</p>
-        <input placeholder="Seu nome" maxLength={40} value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-        {err && <p className="error">{err}</p>}
-        <button className="btn primary" disabled={busy || !name.trim()}>
-          Entrar na fila
+        <div className="brand">
+          <span className="brand-mark">🍄</span>
+          <div>
+            <strong>Karaokê Cogumelo</strong>
+            <span className="muted small">Escolha sua música e cante no telão</span>
+          </div>
+        </div>
+        <label className="field">
+          <span>Como devemos te chamar?</span>
+          <input
+            placeholder="Seu nome"
+            maxLength={40}
+            autoComplete="given-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+          />
+        </label>
+        {err && <p className="error" role="alert">{err}</p>}
+        <button className="btn primary block" disabled={busy || !name.trim()}>
+          {busy ? 'Entrando…' : 'Continuar'}
         </button>
       </form>
     </main>
   );
 }
 
-function MySong({ me, token, onChange }: { me: Me; token: string; onChange: () => void }) {
-  const e = me.entry!;
-  return (
-    <section className="card mysong">
-      {e.thumbnail && <img src={e.thumbnail} alt="" />}
-      <strong>{e.title}</strong>
-      {e.status === 'playing' ? (
-        <p className="big-msg">🎤 É a sua vez! Pega o microfone!</p>
-      ) : me.singer.status === 'pending' ? (
-        <p>Sua música entra na fila assim que o admin aprovar.</p>
-      ) : me.ahead === 0 ? (
-        <p className="big-msg">Você é o próximo! Prepare-se 🎶</p>
-      ) : (
-        <p>{me.ahead} pessoa(s) na sua frente.</p>
-      )}
-      {e.status === 'waiting' && (
-        <button
-          className="btn"
-          onClick={async () => {
-            if (!confirm('Tirar sua música da fila?')) return;
-            await fetch('/api/queue', { method: 'DELETE', headers: { 'x-singer-token': token } });
-            onChange();
-          }}
-        >
-          Trocar / tirar música
-        </button>
-      )}
-    </section>
-  );
-}
-
-function Search({ token, maxDurationSec, onAdded }: { token: string; maxDurationSec: number; onAdded: () => void }) {
-  const [q, setQ] = useState('');
-  const [results, setResults] = useState<SearchResult[] | null>(null);
-  const [busy, setBusy] = useState(false);
+function Room({ me, token }: { me: Singer; token: string }) {
+  const { queue, singers, settings, loaded, refresh } = useLive({ selfId: me.id });
   const [err, setErr] = useState('');
-  const [adding, setAdding] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
-  async function search(e?: React.FormEvent) {
-    e?.preventDefault();
-    if (q.trim().length < 2) return;
-    setBusy(true);
-    setErr('');
-    try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { headers: { 'x-singer-token': token } });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error);
-      setResults(d.results);
-    } catch (e) {
-      setErr((e as Error).message || 'Erro na busca');
-    } finally {
-      setBusy(false);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  const self = singers[me.id] ?? me;
+  const playing = queue.find((q) => q.status === 'playing') ?? null;
+  const line = queue.filter((q) => q.status === 'waiting' && singers[q.singer_id]?.status === 'approved');
+  const entry = queue.find((q) => q.singer_id === me.id) ?? null;
+  const ahead = entry?.status === 'waiting' ? line.findIndex((q) => q.id === entry.id) : -1;
+  const maxDurationSec = settings?.max_duration_sec ?? 360;
+  const open = settings?.queue_open ?? true;
+
+  // rough wait: what is left of the current song + everything ahead + the pauses between songs
+  let waitMin: number | null = null;
+  if (ahead >= 0) {
+    let sec = 0;
+    if (playing) {
+      const started = playing.started_at ? new Date(playing.started_at).getTime() : now;
+      sec += Math.max(0, playing.duration_sec - (now - started) / 1000);
     }
+    const gap = settings?.intermission_sec ?? 8;
+    for (const q of line.slice(0, ahead)) sec += q.duration_sec + gap;
+    waitMin = Math.max(1, Math.round((sec + gap) / 60));
   }
 
-  async function add(r: SearchResult) {
-    setAdding(r.videoId);
+  // buzz the phone when the turn is coming
+  const stage = entry?.status === 'playing' ? 'playing' : ahead === 0 ? 'next' : 'other';
+  const prevStage = useRef(stage);
+  useEffect(() => {
+    if (stage !== prevStage.current && stage !== 'other') {
+      try {
+        navigator.vibrate?.(stage === 'playing' ? [300, 120, 300, 120, 500] : [200, 100, 200]);
+      } catch {}
+    }
+    prevStage.current = stage;
+  }, [stage]);
+
+  const add = useCallback(
+    async (song: SearchResult) => {
+      await post('/api/queue', song, { 'x-singer-token': token });
+      await refresh();
+    },
+    [token, refresh],
+  );
+
+  async function removeMine() {
+    if (!confirm('Tirar sua música da fila?')) return;
     setErr('');
     try {
-      await post('/api/queue', r, { 'x-singer-token': token });
-      onAdded();
+      await del('/api/queue', { 'x-singer-token': token });
+      await refresh();
     } catch (e) {
       setErr((e as Error).message);
-    } finally {
-      setAdding(null);
     }
   }
 
+  if (!loaded) return <Loading />;
+
   return (
-    <section>
-      <form className="searchbar" onSubmit={search}>
-        <input placeholder="Música ou artista" value={q} onChange={(e) => setQ(e.target.value)} enterKeyHint="search" />
-        <button className="btn primary" disabled={busy}>
-          {busy ? '…' : 'Buscar'}
-        </button>
-      </form>
-      <p className="muted small">Só versões karaokê de até {Math.floor(maxDurationSec / 60)} minutos. Uma música por vez.</p>
-      {err && <p className="error">{err}</p>}
-      {results && results.length === 0 && <p className="muted">Nada encontrado. Tente outro nome.</p>}
-      <ul className="results">
-        {results?.map((r) => (
-          <li key={r.videoId}>
-            <img src={r.thumbnail} alt="" loading="lazy" />
-            <div>
-              <strong>{r.title}</strong>
-              <span className="muted small">
-                {r.channel} · {fmt(r.durationSec)}
-              </span>
+    <main className="phone">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark">🍄</span>
+          <strong>Karaokê Cogumelo</strong>
+        </div>
+        <span className="chip">{self.name}</span>
+      </header>
+
+      {self.status === 'blocked' && (
+        <p className="banner danger">O admin não liberou você para cantar hoje.</p>
+      )}
+      {self.status === 'pending' && (
+        <p className="banner warn">
+          Aguardando o admin liberar sua entrada. {entry ? 'Sua música entra na fila assim que ele aprovar.' : 'Você já pode escolher a música.'}
+        </p>
+      )}
+      {err && <p className="error" role="alert">{err}</p>}
+
+      {self.status !== 'blocked' && entry && (
+        <section className={`card mysong ${stage}`}>
+          <span className="label">
+            {entry.status === 'playing' ? 'Cantando agora' : self.status === 'pending' ? 'Sua música' : 'Sua música na fila'}
+          </span>
+          <div className="mysong-row">
+            {entry.thumbnail && <img src={entry.thumbnail} alt="" width={112} height={63} />}
+            <strong>{entry.title}</strong>
+          </div>
+          {entry.status === 'playing' ? (
+            <p className="big-msg">É a sua vez! Pega o microfone 🎤</p>
+          ) : self.status === 'pending' ? null : ahead === 0 ? (
+            <p className="big-msg">Você é o próximo. Prepare-se!</p>
+          ) : ahead > 0 ? (
+            <div className="stats">
+              <div>
+                <strong>{ahead}</strong>
+                <span className="muted small">{ahead === 1 ? 'pessoa na frente' : 'pessoas na frente'}</span>
+              </div>
+              {waitMin !== null && (
+                <div>
+                  <strong>~{waitMin} min</strong>
+                  <span className="muted small">de espera</span>
+                </div>
+              )}
             </div>
-            <button className="btn primary" disabled={adding !== null} onClick={() => add(r)}>
-              {adding === r.videoId ? '…' : 'Cantar'}
+          ) : null}
+          {entry.status === 'waiting' && (
+            <button className="btn ghost" onClick={removeMine}>
+              Trocar ou tirar música
             </button>
-          </li>
-        ))}
-      </ul>
-    </section>
+          )}
+        </section>
+      )}
+
+      {self.status !== 'blocked' && !entry && !open && (
+        <p className="banner">A fila está fechada por hoje. Obrigado por cantar com a gente!</p>
+      )}
+
+      {self.status !== 'blocked' && !entry && open && (
+        <section>
+          <SongSearch
+            authHeaders={{ 'x-singer-token': token }}
+            maxDurationSec={maxDurationSec}
+            pickLabel="Cantar"
+            onPick={add}
+            showPopular
+          />
+          <p className="muted small hint">
+            Só versões karaokê de até {Math.floor(maxDurationSec / 60)} minutos. Uma música por vez.
+          </p>
+        </section>
+      )}
+
+      {(playing || line.length > 0) && (
+        <section className="card">
+          <span className="label">Fila agora</span>
+          <ol className="line">
+            {playing && (
+              <li className={playing.singer_id === me.id ? 'me' : ''}>
+                <span className="pos live">♪</span>
+                <div className="grow">
+                  <strong>{singers[playing.singer_id]?.name ?? '…'}</strong>
+                  <span className="muted small">{playing.title}</span>
+                </div>
+              </li>
+            )}
+            {line.slice(0, 15).map((q, i) => (
+              <li key={q.id} className={q.singer_id === me.id ? 'me' : ''}>
+                <span className="pos">{i + 1}</span>
+                <div className="grow">
+                  <strong>{singers[q.singer_id]?.name ?? '…'}</strong>
+                  <span className="muted small">{q.title}</span>
+                </div>
+              </li>
+            ))}
+          </ol>
+          {line.length > 15 && <span className="muted small">e mais {line.length - 15} na fila</span>}
+        </section>
+      )}
+    </main>
   );
 }
