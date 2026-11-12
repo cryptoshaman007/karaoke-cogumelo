@@ -24,11 +24,24 @@ export default function AdminLogin({ title, onOk }: { title: string; onOk: () =>
           }
         }}
       >
-        <h1>🍄 {title}</h1>
-        <input type="password" placeholder="Senha do admin" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus />
-        {err && <p className="error">{err}</p>}
-        <button className="btn primary" disabled={busy || !pw}>
-          Entrar
+        <div className="brand">
+          <span className="brand-mark">🍄</span>
+          <div>
+            <strong>Karaokê Cogumelo</strong>
+            <span className="muted small">{title}</span>
+          </div>
+        </div>
+        <input
+          type="password"
+          placeholder="Senha do admin"
+          autoComplete="current-password"
+          value={pw}
+          onChange={(e) => setPw(e.target.value)}
+          autoFocus
+        />
+        {err && <p className="error" role="alert">{err}</p>}
+        <button className="btn primary block" disabled={busy || !pw}>
+          {busy ? 'Entrando…' : 'Entrar'}
         </button>
       </form>
     </main>

@@ -3,6 +3,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { cookies } from 'next/headers';
 import { NextRequest } from 'next/server';
 import { db } from './supabase-server';
+import type { Singer } from './types';
 
 export const ADMIN_COOKIE = 'karaoke_admin';
 
@@ -45,14 +46,16 @@ export function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex');
 }
 
-/** Finds the singer for the x-singer-token header. */
+/** Finds the singer for the x-singer-token header. Throws if the database is unreachable. */
 export async function singerFromRequest(req: NextRequest) {
   const token = req.headers.get('x-singer-token');
   if (!token || token.length > 100) return null;
-  const { data } = await db()
+  const { data, error } = await db()
     .from('singers')
     .select('id, name, status, created_at')
     .eq('token_hash', hashToken(token))
     .maybeSingle();
-  return data as { id: string; name: string; status: string; created_at: string } | null;
+  // A database hiccup must not look like "unknown singer": the phone would throw its token away.
+  if (error) throw error;
+  return data as Singer | null;
 }

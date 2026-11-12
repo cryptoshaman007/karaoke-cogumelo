@@ -1,5 +1,6 @@
 -- Schema applied to the Supabase project (migrations init_karaoke + advance_queue_fn).
 -- Kept here for reference / to recreate the database.
+-- After this file, also run everything in supabase/migrations/ in order.
 
 create table public.settings (
   id int primary key default 1 check (id = 1),
