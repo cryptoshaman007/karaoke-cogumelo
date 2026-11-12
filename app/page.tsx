@@ -218,6 +218,16 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     }
   }
 
+  // The skip button on this screen. Hammering it skips one song, not several: after a skip it
+  // rests for a few seconds (the next singer's countdown is on screen anyway).
+  const lastSkip = useRef(0);
+  function skipNow() {
+    const id = playingRef.current?.id ?? null;
+    if (id == null || Date.now() - lastSkip.current < 4000) return;
+    lastSkip.current = Date.now();
+    void advance('skipped', id);
+  }
+
   function clearIntro() {
     if (introTimer.current) clearInterval(introTimer.current);
     introTimer.current = null;
@@ -739,7 +749,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
               </div>
             )}
             <div className="row">
-              <button className="btn" onClick={() => advance('skipped', playing?.id ?? null)} disabled={!playing}>
+              <button className="btn" onClick={skipNow} disabled={!playing}>
                 <Icon name="skip" /> Pular música
               </button>
               <button
