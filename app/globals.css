@@ -93,6 +93,8 @@ input[type=search]::-webkit-search-cancel-button { display: none; }
 .tv { height: 100vh; display: grid; grid-template-columns: 1fr clamp(260px, 21vw, 420px); overflow: hidden; }
 .stage { position: relative; background: #000; overflow: hidden; }
 .player-wrap, .player-wrap .yt-holder, .player-wrap iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+/* a click on the projector never pauses the song or replays one that ended */
+.player-wrap iframe { pointer-events: none; }
 .eyebrow { text-transform: uppercase; letter-spacing: .14em; font-size: clamp(.8rem, 1.1vw, 1.3rem); font-weight: 600; color: var(--accent); }
 
 .idle { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 5vw; padding: 4vw; background: radial-gradient(120% 90% at 20% 10%, #1b1530 0%, #0b0b0f 60%); }
