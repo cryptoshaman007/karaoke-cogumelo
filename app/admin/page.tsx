@@ -2,9 +2,10 @@
 import { useEffect, useRef, useState } from 'react';
 import AdminLogin from '@/components/AdminLogin';
 import Icon from '@/components/Icon';
+import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
-import { fmt, post, useLive } from '@/lib/useLive';
-import type { SearchResult } from '@/lib/types';
+import { fmt, get, post, useLive } from '@/lib/useLive';
+import type { SearchResult, Standing } from '@/lib/types';
 
 export default function AdminPage() {
   const [admin, setAdmin] = useState<boolean | null>(null);
@@ -25,7 +26,7 @@ export default function AdminPage() {
 }
 
 function Panel({ onLogout }: { onLogout: () => void }) {
-  const { queue, singers, settings, loaded, refresh } = useLive({ admin: true });
+  const { queue, singers, settings, results, loaded, refresh } = useLive({ admin: true });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [minutes, setMinutes] = useState('');
@@ -34,6 +35,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
   const [volume, setVolume] = useState<number | null>(null);
   const [addName, setAddName] = useState('');
   const [added, setAdded] = useState('');
+  const [standings, setStandings] = useState<Standing[]>([]);
   const filled = useRef(false);
   const volTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -45,6 +47,25 @@ function Panel({ onLogout }: { onLogout: () => void }) {
     setGap(String(settings.intermission_sec));
     setMessage(settings.tv_message);
   }, [settings]);
+
+  // partial ranking while a contest runs: refreshed every few seconds and when the song changes
+  const contestId = settings?.contest_id ?? null;
+  const playingId = queue.find((q) => q.status === 'playing')?.id ?? null;
+  useEffect(() => {
+    if (!contestId) return setStandings([]);
+    let stop = false;
+    const load = () =>
+      document.visibilityState === 'visible' &&
+      get('/api/admin/contest')
+        .then((d) => !stop && setStandings(d.standings ?? []))
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 8000);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, [contestId, playingId]);
 
   async function act(url: string, body: unknown) {
     setErr('');
@@ -63,6 +84,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
     }
   }
   const setting = (body: unknown) => act('/api/admin/settings', body);
+  const contest = (action: 'start' | 'end' | 'hide') => act('/api/admin/contest', { action });
   const queueAct = (body: unknown) => act('/api/admin/queue', body);
 
   function changeVolume(v: number) {
@@ -248,6 +270,48 @@ function Panel({ onLogout }: { onLogout: () => void }) {
         )}
       </section>
 
+      <section className={`card ${settings.contest_id ? 'contest' : ''}`}>
+        <h2>🏆 Campeonato {settings.contest_id && <span className="count-pill">valendo</span>}</h2>
+        {settings.contest_id ? (
+          <>
+            <p className="muted small">
+              Todo mundo dá nota de 1 a 5 pelo celular enquanto cada pessoa canta. Parcial (só você vê):
+            </p>
+            <Ranking rows={standings} />
+            <button
+              className="btn primary"
+              disabled={busy}
+              onClick={() => confirm('Encerrar o campeonato e mostrar o vencedor no telão?') && contest('end')}
+            >
+              Encerrar e mostrar o vencedor
+            </button>
+          </>
+        ) : results ? (
+          <>
+            <p className="muted small">Resultado final. Está aparecendo no telão e nos celulares.</p>
+            <Ranking rows={results} highlightFirst />
+            <div className="row">
+              <button className="btn" disabled={busy} onClick={() => contest('hide')}>
+                Tirar do telão
+              </button>
+              <button className="btn" disabled={busy} onClick={() => contest('start')}>
+                Novo campeonato
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="muted small">
+              Ao ligar, cada cliente dá uma nota (5 carinhas) para quem está cantando. Quando você encerrar, o telão mostra
+              a classificação e o vencedor.
+            </p>
+            <button className="btn self-start" disabled={busy} onClick={() => contest('start')}>
+              Iniciar campeonato
+            </button>
+          </>
+        )}
+      </section>
+
       <details className="card fold">
         <summary>
           <div className="grow">
@@ -282,6 +346,13 @@ function Panel({ onLogout }: { onLogout: () => void }) {
           <span>
             <strong>Aprovar pessoas novas</strong>
             <span className="muted small">Quem já foi aprovado uma vez não precisa de novo.</span>
+          </span>
+        </label>
+        <label className="switch">
+          <input type="checkbox" checked={settings.reactions_enabled} onChange={(e) => setting({ reactionsEnabled: e.target.checked })} />
+          <span>
+            <strong>Reações no telão</strong>
+            <span className="muted small">Palmas, coração, fogo e choro enviados pelo celular.</span>
           </span>
         </label>
         <div className="field">

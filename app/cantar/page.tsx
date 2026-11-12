@@ -1,8 +1,9 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
-import { del, post, useLive } from '@/lib/useLive';
-import type { SearchResult, Singer } from '@/lib/types';
+import { del, get, post, useLive } from '@/lib/useLive';
+import { REACTIONS, SCORE_EMOJIS, SCORE_LABELS, type QueueItem, type SearchResult, type Singer } from '@/lib/types';
 
 const TOKEN_KEY = 'karaoke_token';
 
@@ -132,7 +133,7 @@ function Join({ onJoined }: { onJoined: (token: string, singer: Singer) => void 
 }
 
 function Room({ me, token }: { me: Singer; token: string }) {
-  const { queue, singers, settings, loaded, refresh } = useLive({ selfId: me.id });
+  const { queue, singers, settings, results, loaded, refresh } = useLive({ selfId: me.id });
   const [err, setErr] = useState('');
   const [now, setNow] = useState(() => Date.now());
 
@@ -148,6 +149,8 @@ function Room({ me, token }: { me: Singer; token: string }) {
   const ahead = entry?.status === 'waiting' ? line.findIndex((q) => q.id === entry.id) : -1;
   const maxDurationSec = settings?.max_duration_sec ?? 360;
   const open = settings?.queue_open ?? true;
+  const contestOn = !!settings?.contest_id;
+  const canInteract = self.status === 'approved';
 
   // rough wait: what is left of the current song + everything ahead + the pauses between songs
   let waitMin: number | null = null;
@@ -214,6 +217,31 @@ function Room({ me, token }: { me: Singer; token: string }) {
         </p>
       )}
       {err && <p className="error" role="alert">{err}</p>}
+
+      {results && (
+        <section className="card contest">
+          <span className="label">🏆 Resultado do campeonato</span>
+          {results[0]?.score != null && (
+            <p className="big-msg">
+              {results[0].name} venceu!
+            </p>
+          )}
+          <Ranking rows={results} limit={10} highlightFirst />
+        </section>
+      )}
+
+      {contestOn && playing && playing.singer_id === me.id && (
+        <section className="card contest">
+          <span className="label">🏆 Campeonato valendo</span>
+          <p>A galera está dando nota para você agora. Capricha!</p>
+        </section>
+      )}
+      {contestOn && playing && playing.singer_id !== me.id && canInteract && (
+        <VoteCard token={token} playing={playing} performer={singers[playing.singer_id]?.name ?? 'quem está cantando'} />
+      )}
+      {contestOn && !playing && (
+        <p className="banner contest-banner">🏆 Campeonato valendo! Dê sua nota para cada pessoa enquanto ela canta.</p>
+      )}
 
       {self.status !== 'blocked' && entry && (
         <section className={`card mysong ${stage}`}>
@@ -295,6 +323,112 @@ function Room({ me, token }: { me: Singer; token: string }) {
           {line.length > 15 && <span className="muted small">e mais {line.length - 15} na fila</span>}
         </section>
       )}
+
+      {playing && canInteract && settings?.reactions_enabled && <ReactionBar token={token} />}
     </main>
+  );
+}
+
+/** Contest mode: five faces, from "off key" to "nailed it". The vote can be changed until the song ends. */
+function VoteCard({ token, playing, performer }: { token: string; playing: QueueItem; performer: string }) {
+  const [vote, setVote] = useState<number | null>(null);
+  const [err, setErr] = useState('');
+
+  // a new song starts with no vote; ask the server in case this phone already voted (page reload)
+  useEffect(() => {
+    setVote(null);
+    setErr('');
+    let stop = false;
+    get('/api/vote', { 'x-singer-token': token })
+      .then((d) => {
+        if (!stop && d.queueId === playing.id && d.score) setVote((v) => v ?? d.score);
+      })
+      .catch(() => {});
+    return () => {
+      stop = true;
+    };
+  }, [playing.id, token]);
+
+  async function cast(score: number) {
+    const prev = vote;
+    setVote(score);
+    setErr('');
+    try {
+      navigator.vibrate?.(15);
+    } catch {}
+    try {
+      await post('/api/vote', { score }, { 'x-singer-token': token });
+    } catch (e) {
+      setVote(prev);
+      setErr((e as Error).message);
+    }
+  }
+
+  return (
+    <section className="card contest">
+      <span className="label">🏆 Campeonato · sua nota</span>
+      <p>
+        O que você está achando de <strong>{performer}</strong>?
+      </p>
+      <div className="votes" role="radiogroup" aria-label={`Nota para ${performer}`}>
+        {SCORE_EMOJIS.map((emoji, i) => (
+          <button
+            key={i}
+            role="radio"
+            aria-checked={vote === i + 1}
+            aria-label={SCORE_LABELS[i]}
+            className={vote === i + 1 ? 'on' : ''}
+            onClick={() => cast(i + 1)}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+      {err ? (
+        <p className="error" role="alert">{err}</p>
+      ) : (
+        <p className="muted small">{vote ? `${SCORE_LABELS[vote - 1]}! Dá para mudar até a música acabar.` : 'Toque em uma carinha. A votação fecha quando a música acabar.'}</p>
+      )}
+    </section>
+  );
+}
+
+/** Quick reactions that float on the projector while someone sings. */
+function ReactionBar({ token }: { token: string }) {
+  const lastAt = useRef(0);
+  const [pops, setPops] = useState<{ id: number; i: number }[]>([]);
+  const [msg, setMsg] = useState('');
+
+  function send(i: number) {
+    const now = Date.now();
+    if (now - lastAt.current < 450) return; // one tap at a time
+    lastAt.current = now;
+    setPops((p) => [...p.slice(-6), { id: now, i }]);
+    setTimeout(() => setPops((p) => p.filter((x) => x.id !== now)), 900);
+    try {
+      navigator.vibrate?.(12);
+    } catch {}
+    post('/api/react', { emoji: REACTIONS[i].key }, { 'x-singer-token': token }).catch((e) => {
+      setMsg((e as Error).message);
+      setTimeout(() => setMsg(''), 2500);
+    });
+  }
+
+  return (
+    <div className="reactbar" aria-label="Mandar reação para o telão">
+      {msg && <span className="reactbar-msg">{msg}</span>}
+      {REACTIONS.map((r, i) => (
+        <button key={r.key} aria-label={r.label} onClick={() => send(i)}>
+          {r.emoji}
+          {pops
+            .filter((p) => p.i === i)
+            .map((p) => (
+              <span key={p.id} className="pop" aria-hidden="true">
+                {r.emoji}
+              </span>
+            ))}
+        </button>
+      ))}
+    </div>
   );
 }

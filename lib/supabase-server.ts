@@ -32,3 +32,9 @@ export async function advanceQueue(current: number | null, endStatus: 'done' | '
   await db().from('settings').update({ paused: false }).eq('id', 1).eq('paused', true);
   return (data as number | null) ?? null;
 }
+
+/** True when a database error means "the newer tables/functions are not installed yet". */
+export function isMissingSchema(error: { code?: string } | null): boolean {
+  return !!error && ['42703', '42883', '42P01', 'PGRST202', 'PGRST204', 'PGRST205'].includes(error.code ?? '');
+}
+export const NEEDS_MIGRATION = 'Esta função precisa da atualização do banco de dados.';

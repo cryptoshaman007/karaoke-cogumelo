@@ -1,12 +1,14 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { browserClient } from './supabase-browser';
-import { normalizeSettings, type QueueItem, type Settings, type Singer } from './types';
+import { normalizeSettings, type QueueItem, type Settings, type Singer, type Standing } from './types';
 
 export interface LiveState {
   queue: QueueItem[]; // waiting + playing, ordered
   singers: Record<string, Singer>;
   settings: Settings | null;
+  /** final ranking of the contest whose results are on screen (null = nothing to show) */
+  results: Standing[] | null;
   loaded: boolean;
   refresh: () => Promise<void>;
 }
@@ -26,10 +28,11 @@ export function useLive({ admin = false, selfId = null }: Options = {}): LiveSta
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [singers, setSingers] = useState<Record<string, Singer>>({});
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [results, setResults] = useState<Standing[] | null>(null);
   const [loaded, setLoaded] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seq = useRef(0);
-  const last = useRef({ q: '', s: '', st: '' });
+  const last = useRef({ q: '', s: '', st: '', r: 'null' });
 
   const refresh = useCallback(async () => {
     const mine = ++seq.current;
@@ -52,7 +55,13 @@ export function useLive({ admin = false, selfId = null }: Options = {}): LiveSta
         sb.from('singers').select(SINGER_COLS).eq('status', 'blocked').order('created_at', { ascending: false }).limit(50),
       );
     }
-    const res = await Promise.all(singerQueries);
+    const norm = st.data ? normalizeSettings(st.data as Partial<Settings>) : null;
+    const [res, contest] = await Promise.all([
+      Promise.all(singerQueries),
+      norm?.results_contest_id
+        ? sb.from('contests').select('results').eq('id', norm.results_contest_id).maybeSingle()
+        : Promise.resolve(null),
+    ]);
     if (mine !== seq.current) return; // a newer refresh already answered
     if (res.some((r) => r.error)) return;
     const map: Record<string, Singer> = {};
@@ -63,10 +72,14 @@ export function useLive({ admin = false, selfId = null }: Options = {}): LiveSta
     const ss = JSON.stringify(map);
     if (qs !== last.current.q) (last.current.q = qs), setQueue(rows);
     if (ss !== last.current.s) (last.current.s = ss), setSingers(map);
-    if (st.data) {
-      const norm = normalizeSettings(st.data as Partial<Settings>);
+    if (norm) {
       const sts = JSON.stringify(norm);
       if (sts !== last.current.st) (last.current.st = sts), setSettings(norm);
+      if (!contest || !contest.error) {
+        const list = contest ? ((contest.data?.results as Standing[] | null) ?? []) : null;
+        const rs = JSON.stringify(list);
+        if (rs !== last.current.r) (last.current.r = rs), setResults(list);
+      }
     }
     setLoaded(true);
   }, [admin, selfId]);
@@ -100,7 +113,7 @@ export function useLive({ admin = false, selfId = null }: Options = {}): LiveSta
     };
   }, [refresh]);
 
-  return { queue, singers, settings, loaded, refresh };
+  return { queue, singers, settings, results, loaded, refresh };
 }
 
 async function send(method: string, url: string, body: unknown, headers: Record<string, string>) {
@@ -119,6 +132,7 @@ async function send(method: string, url: string, body: unknown, headers: Record<
   return data;
 }
 
+export const get = (url: string, headers: Record<string, string> = {}) => send('GET', url, undefined, headers);
 export const post = (url: string, body: unknown, headers: Record<string, string> = {}) => send('POST', url, body, headers);
 export const del = (url: string, headers: Record<string, string> = {}) => send('DELETE', url, undefined, headers);
 

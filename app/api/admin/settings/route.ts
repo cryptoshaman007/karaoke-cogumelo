@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
   if (body.tvMessage != null) {
     patch.tv_message = String(body.tvMessage).replace(/\s+/g, ' ').trim().slice(0, 140);
   }
+  if (body.reactionsEnabled != null) patch.reactions_enabled = Boolean(body.reactionsEnabled);
   if (body.paused != null) patch.paused = Boolean(body.paused);
   if (body.volume != null) {
     const v = Math.round(Number(body.volume));
@@ -40,7 +41,7 @@ export async function POST(req: NextRequest) {
   if (error) {
     // 42703 / PGRST204: the database is still missing the newer columns
     if (error.code === '42703' || error.code === 'PGRST204') {
-      return fail('Esta função precisa da atualização do banco de dados (migração v2).', 409);
+      return fail('Esta função precisa da atualização do banco de dados (migrações em supabase/migrations).', 409);
     }
     return fail(error.message, 500);
   }

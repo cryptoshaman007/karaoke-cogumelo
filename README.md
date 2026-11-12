@@ -10,6 +10,12 @@ App web de karaokê para o bar. O cliente escaneia o QR code, digita o nome, bus
 | `/cantar` | Celular do cliente | Nome, busca, músicas mais cantadas, entrar na fila, ver a fila ao vivo, posição e tempo estimado de espera. O celular vibra quando chega a vez. |
 | `/admin` | Celular do admin | Aprovar/recusar, pausar, reiniciar, pular, volume, reordenar, tocar em seguida, colocar alguém na fila, abrir/fechar a fila, recado no telão, limite de minutos, ligar/desligar aprovação. |
 
+### Reações e campeonato
+
+- **Reações:** enquanto alguém canta, o celular mostra quatro botões (👏 ❤️ 🔥 😭). Cada toque faz o emoji subir no telão. Limite de 8 reações a cada 10 segundos por pessoa. Liga e desliga em *Configurações* no admin.
+- **Campeonato:** o admin liga em *Campeonato*. Enquanto estiver valendo, cada cliente dá uma nota de 1 a 5 (cinco carinhas) para quem está cantando, pode trocar até a música acabar e não vota em si mesmo. Os votos são secretos; só o admin vê a parcial. Ao encerrar, o telão e os celulares mostram a classificação e o vencedor (melhor média; empate decide quem teve mais votos). O vídeo fica parado enquanto o resultado está no telão.
+
+
 A fila fica salva no Supabase, então fechar o navegador ou desligar o PC não perde nada.
 
 ## Como colocar no ar (uma vez só)
@@ -43,6 +49,7 @@ A fila fica salva no Supabase, então fechar o navegador ou desligar o PC não p
 - Regras no banco: uma música ativa por pessoa, uma tocando por vez, e a função `advance_queue` avança a fila com trava para evitar pulo duplo.
 - O celular do cliente lê a fila direto do Supabase (Realtime), sem ficar chamando o servidor da Vercel.
 - O telão guarda o ponto da música: se a página recarregar ou o PC reiniciar, continua de onde parou.
+- Votos e reações passam por funções do banco (`cast_vote`, `send_reaction`) chamadas só pelo servidor: uma ida ao banco por toque.
 - Limite de tentativas no login do admin (8 erros em 15 min), nas entradas e nas buscas, guardado na tabela `rate_events`.
 
 ## Banco de dados

@@ -4,7 +4,8 @@ import QRCode from 'react-qr-code';
 import AdminLogin from '@/components/AdminLogin';
 import Icon from '@/components/Icon';
 import { post, useLive } from '@/lib/useLive';
-import type { QueueItem, Settings } from '@/lib/types';
+import { browserClient } from '@/lib/supabase-browser';
+import { fmtScore, REACTIONS, type QueueItem, type Settings } from '@/lib/types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
@@ -47,6 +48,9 @@ function writeProgress(p: { id: number; t: number } | null) {
   } catch {}
 }
 
+/** The video waits while the admin paused it or while contest results are on screen. */
+const onHold = (s: Settings | null) => !!s && (s.paused || s.results_contest_id != null);
+
 export default function TvPage() {
   const [admin, setAdmin] = useState<boolean | null>(null);
   useEffect(() => {
@@ -66,12 +70,13 @@ export default function TvPage() {
 }
 
 function Tv() {
-  const { queue, singers, settings, loaded } = useLive();
+  const { queue, singers, settings, results, loaded } = useLive();
   const [started, setStarted] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [origin, setOrigin] = useState('');
   const [intro, setIntro] = useState<{ id: number; left: number } | null>(null);
   const [notice, setNotice] = useState('');
+  const [floaters, setFloaters] = useState<{ id: number; emoji: string; x: number; size: number; dur: number }[]>([]);
 
   const playerRef = useRef<any>(null);
   const playerReady = useRef(false);
@@ -187,7 +192,7 @@ function Tv() {
               advance('done');
             }
             // admin paused from the phone while the video was still loading
-            if (e.data === YT.PlayerState.PLAYING && settingsRef.current?.paused) playerRef.current?.pauseVideo?.();
+            if (e.data === YT.PlayerState.PLAYING && onHold(settingsRef.current)) playerRef.current?.pauseVideo?.();
           },
           onError: () => {
             // video blocked for embedding, removed, etc.
@@ -214,13 +219,44 @@ function Tv() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started, loaded, playing?.id, waiting.length]);
 
-  // remote control from the admin phone: pause / resume
+  // remote control from the admin phone: pause / resume. Contest results on screen also hold the video.
+  const hold = onHold(settings);
   useEffect(() => {
     const p = playerRef.current;
     if (!p || !playerReady.current || !videoStarted.current) return;
-    if (settings?.paused) p.pauseVideo?.();
+    if (hold) p.pauseVideo?.();
     else p.playVideo?.();
-  }, [settings?.paused]);
+  }, [hold]);
+
+  // reactions sent from the phones float up over the video
+  const reactionsOn = !!settings?.reactions_enabled;
+  useEffect(() => {
+    if (!reactionsOn) return;
+    const sb = browserClient();
+    let n = 0;
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const ch = sb
+      .channel('karaoke-reactions')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reactions' }, (payload) => {
+        const emoji = REACTIONS.find((r) => r.key === (payload.new as { emoji?: string }).emoji)?.emoji;
+        if (!emoji) return;
+        const id = ++n;
+        const dur = 3.2 + Math.random() * 1.6;
+        // at most 40 on screen: a burst never slows the projector down
+        setFloaters((f) => (f.length >= 40 ? f : [...f, { id, emoji, x: 4 + Math.random() * 88, size: 0.8 + Math.random() * 0.6, dur }]));
+        const t = setTimeout(() => {
+          timers.delete(t);
+          setFloaters((f) => f.filter((x) => x.id !== id));
+        }, dur * 1000 + 100);
+        timers.add(t);
+      })
+      .subscribe();
+    return () => {
+      sb.removeChannel(ch);
+      timers.forEach(clearTimeout);
+      setFloaters([]);
+    };
+  }, [reactionsOn]);
 
   // remote control: volume
   useEffect(() => {
@@ -285,6 +321,7 @@ function Tv() {
   const nowName = playing ? singers[playing.singer_id]?.name ?? '' : '';
   const open = settings?.queue_open ?? true;
   const showVideo = !!playing && !intro;
+  const winner = results?.[0]?.score != null ? results[0] : null;
   const SHOWN = 8;
 
   return (
@@ -328,7 +365,45 @@ function Tv() {
           </div>
         )}
 
-        {showVideo && settings?.paused && <div className="badge-paused">Pausado</div>}
+        {showVideo && settings?.paused && !results && <div className="badge-paused">Pausado</div>}
+
+        {floaters.length > 0 && (
+          <div className="floaters" aria-hidden="true">
+            {floaters.map((f) => (
+              <span key={f.id} style={{ left: `${f.x}%`, fontSize: `${f.size * 4.2}vw`, animationDuration: `${f.dur}s` }}>
+                {f.emoji}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {results && (
+          <div className="results-screen">
+            <span className="eyebrow">🏆 Resultado do campeonato</span>
+            {winner ? (
+              <>
+                <h1>{winner.name}</h1>
+                <p>
+                  {winner.title} · nota {fmtScore(winner.score)} ({winner.votes === 1 ? '1 voto' : `${winner.votes} votos`})
+                </p>
+              </>
+            ) : (
+              <h1 className="smaller">Sem votos desta vez</h1>
+            )}
+            {results.length > 1 && (
+              <ol>
+                {results.slice(winner ? 1 : 0, 8).map((r, i) => (
+                  <li key={r.queue_id}>
+                    <span className="pos">{i + (winner ? 2 : 1)}</span>
+                    <strong>{r.name}</strong>
+                    <span className="song">{r.title}</span>
+                    <span className="pts">{fmtScore(r.score)}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        )}
         {notice && <div className="toast">{notice}</div>}
 
         {!started && (
@@ -369,6 +444,12 @@ function Tv() {
           {waiting.length > SHOWN && <p className="muted more">+ {waiting.length - SHOWN} na fila</p>}
         </div>
 
+        {settings?.contest_id && (
+          <div className="tv-message contest-on">
+            🏆 Campeonato valendo!
+            <small>Dê sua nota pelo celular enquanto cada pessoa canta.</small>
+          </div>
+        )}
         {settings?.tv_message && <div className="tv-message">{settings.tv_message}</div>}
 
         <div className="sing">
