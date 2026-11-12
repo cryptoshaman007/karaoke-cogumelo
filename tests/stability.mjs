@@ -189,6 +189,12 @@ async function wire(page, b, { admin = true } = {}) {
       if (b.playerMode === '401') return json({ error: 'Faça login no admin' }, 401);
       return json({ playing: b.advance(body.current ?? null, body.endStatus === 'skipped' ? 'skipped' : 'done') });
     }
+    if (path === '/api/admin/settings') {
+      if (body.paused != null) b.settings.paused = !!body.paused;
+      if (body.restart) Object.assign(b.settings, { restart_at: new Date().toISOString(), paused: false });
+      b.notify('settings');
+      return json({ ok: true });
+    }
     if (path === '/api/popular') return json({ songs: [] });
     if (path === '/api/join') {
       const sid = `00000000-0000-4000-9000-${String(b.nextId++).padStart(12, '0')}`;
@@ -701,6 +707,30 @@ await test('resultado do campeonato no telão: a próxima música espera calada 
   b.notify('settings');
   const t = await until(page, async () => (await yt(page)).state === 1, 10000);
   expect(t >= 0, 'não começou depois que o resultado saiu');
+  await ctx.close();
+});
+
+await test('botões do telão: pausar, voltar ao início e pular', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'vidAAAAAAA1', { duration: 200 });
+  b.add('Bia', 'vidBBBBBBB2', { duration: 200 });
+  const { page, ctx, errors } = await openTv(b);
+  await page.evaluate(() => ((window.__yt.dur.vidAAAAAAA1 = 200), (window.__yt.dur.vidBBBBBBB2 = 200)));
+  await until(page, async () => (await yt(page)).time > 30, 60000);
+  await page.getByRole('button', { name: 'Pausar' }).click();
+  expect((await until(page, async () => (await yt(page)).state === 2, 5000)) >= 0, 'não pausou');
+  await run(page, 30000);
+  expect((await yt(page)).state === 2, 'voltou a tocar sozinho durante a pausa');
+  await page.getByRole('button', { name: 'Continuar' }).click();
+  expect((await until(page, async () => (await yt(page)).state === 1, 5000)) >= 0, 'não continuou');
+  await page.getByRole('button', { name: 'Voltar ao início da música' }).click();
+  expect((await until(page, async () => (await yt(page)).time < 10, 5000)) >= 0, 'não voltou ao início');
+  expect(b.queue[0].status === 'playing', 'trocou de música ao voltar');
+  const skip = page.getByRole('button', { name: 'Pular para a próxima' });
+  for (let i = 0; i < 6; i++) await skip.click({ force: true, timeout: 500 }).catch(() => {});
+  await until(page, async () => (await yt(page)).videoId === 'vidBBBBBBB2' && (await yt(page)).state === 1, 20000);
+  expect(b.queue[0].status === 'skipped' && b.queue[1].status === 'playing', `pulo errado: ${statuses(b)}`);
+  expect(errors.length === 0, errors.join('; '));
   await ctx.close();
 });
 

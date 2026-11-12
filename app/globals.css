@@ -115,6 +115,11 @@ input[type=search]::-webkit-search-cancel-button { display: none; }
 .intro .count { margin-top: 1.5vw; width: clamp(64px, 7vw, 130px); height: clamp(64px, 7vw, 130px); border-radius: 50%; border: 3px solid var(--accent); display: grid; place-items: center; font-size: clamp(1.8rem, 3.4vw, 4.5rem); font-weight: 700; font-variant-numeric: tabular-nums; animation: pop .35s ease-out; }
 @keyframes pop { from { transform: scale(1.18); opacity: .5; } to { transform: scale(1); opacity: 1; } }
 
+.tv-controls { position: absolute; left: .8vw; bottom: .8vw; z-index: 2; display: flex; gap: 4px; padding: 4px; border-radius: 99px; background: rgba(11, 11, 15, .55); opacity: .3; transition: opacity .15s; }
+.tv-controls:hover, .tv-controls:focus-within { opacity: 1; }
+.tv-controls button { width: 34px; height: 34px; display: grid; place-items: center; border: 0; border-radius: 50%; background: none; color: #fff; cursor: pointer; line-height: 0; }
+.tv-controls button:hover, .tv-controls button:focus-visible { background: rgba(255, 255, 255, .16); }
+.tv-controls button:disabled { opacity: .5; cursor: default; }
 .badge-paused { position: absolute; top: 1.2vw; left: 1.2vw; background: rgba(11, 11, 15, .85); border: 1px solid var(--line); border-radius: 99px; padding: .5rem 1.1rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; font-size: clamp(.8rem, 1vw, 1.2rem); }
 .toast { position: absolute; z-index: 4; left: 50%; bottom: 2vw; transform: translateX(-50%); background: rgba(11, 11, 15, .92); border: 1px solid var(--line); border-radius: var(--radius); padding: .8rem 1.3rem; font-size: clamp(.9rem, 1.2vw, 1.5rem); }
 

@@ -228,6 +228,22 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     void advance('skipped', id);
   }
 
+  // Small controls on the projector itself (same effect as the buttons on the admin phone).
+  const [ctrlBusy, setCtrlBusy] = useState(false);
+  async function control(body: { paused: boolean } | { restart: true }) {
+    if (ctrlBusy) return;
+    setCtrlBusy(true);
+    try {
+      await post('/api/admin/settings', body);
+      await refresh();
+    } catch (e) {
+      if ((e as ApiError).status === 401) onLogout();
+      else flash((e as Error).message);
+    } finally {
+      setCtrlBusy(false);
+    }
+  }
+
   function clearIntro() {
     if (introTimer.current) clearInterval(introTimer.current);
     introTimer.current = null;
@@ -655,6 +671,24 @@ function Tv({ onLogout }: { onLogout: () => void }) {
                 ))}
               </ol>
             )}
+          </div>
+        )}
+        {started && playing && !results && (
+          <div className="tv-controls">
+            <button
+              aria-label={settings?.paused ? 'Continuar' : 'Pausar'}
+              title={settings?.paused ? 'Continuar' : 'Pausar'}
+              disabled={ctrlBusy}
+              onClick={() => control({ paused: !settings?.paused })}
+            >
+              <Icon name={settings?.paused ? 'play' : 'pause'} size={18} />
+            </button>
+            <button aria-label="Voltar ao início da música" title="Voltar ao início da música" disabled={ctrlBusy} onClick={() => control({ restart: true })}>
+              <Icon name="restart" size={18} />
+            </button>
+            <button aria-label="Pular para a próxima" title="Pular para a próxima" onClick={skipNow}>
+              <Icon name="skip" size={18} />
+            </button>
           </div>
         )}
         {notice && <div className="toast">{notice}</div>}
