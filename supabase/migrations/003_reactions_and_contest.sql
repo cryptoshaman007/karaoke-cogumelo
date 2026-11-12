@@ -11,8 +11,12 @@ create table if not exists public.contests (
 );
 create unique index if not exists contests_one_active on public.contests ((true)) where ended_at is null;
 alter table public.contests enable row level security;
-drop policy if exists "public read contests" on public.contests;
-create policy "public read contests" on public.contests for select to anon, authenticated using (true);
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'contests' and policyname = 'public read contests') then
+    create policy "public read contests" on public.contests for select to anon, authenticated using (true);
+  end if;
+end $$;
 revoke insert, update, delete on public.contests from anon, authenticated;
 grant select on public.contests to anon, authenticated;
 
@@ -46,8 +50,12 @@ create table if not exists public.reactions (
 create index if not exists reactions_created_idx on public.reactions (created_at);
 create index if not exists reactions_queue_idx on public.reactions (queue_id);
 alter table public.reactions enable row level security;
-drop policy if exists "public read reactions" on public.reactions;
-create policy "public read reactions" on public.reactions for select to anon, authenticated using (true);
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'reactions' and policyname = 'public read reactions') then
+    create policy "public read reactions" on public.reactions for select to anon, authenticated using (true);
+  end if;
+end $$;
 revoke insert, update, delete on public.reactions from anon, authenticated;
 grant select on public.reactions to anon, authenticated;
 
