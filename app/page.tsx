@@ -6,7 +6,7 @@ import { useAdmin } from '@/lib/useAdmin';
 import Icon from '@/components/Icon';
 import Avatar from '@/components/Avatar';
 import SongSearch from '@/components/SongSearch';
-import { post, useLive, type ApiError } from '@/lib/useLive';
+import { listenInserts, post, useLive, type ApiError } from '@/lib/useLive';
 import { browserClient } from '@/lib/supabase-browser';
 import { fmtScore, isGifUrl, photoUrl, REACTIONS, scorePhrase, STICKERS, type QueueItem, type SearchResult, type Settings } from '@/lib/types';
 
@@ -106,6 +106,27 @@ const RELOAD_UNSTARTED_EVERY = 75000;
 const SKIP_UNSTARTED_AFTER = 240000;
 const MAX_DEAD_SKIPS = 2; // in a row. After that the problem is not the videos: stop skipping
 const PLAYER_READY_TIMEOUT = 20000;
+// Right after a video is loaded the player can still report the previous one ("ended", its
+// time). Nothing is decided from those readings during this moment.
+const LOAD_GRACE = 5000;
+// Ranking or contest results on screen hold the queue. With people waiting they close by themselves after this.
+const HOLD_AUTOCLOSE_MS = 3 * 60 * 1000;
+
+// Only one projector screen plays the karaoke. Each open screen has an id (kept across a reload of
+// the same tab) and says "I am here" every few seconds; a second screen becomes a mirror.
+const TV_ID_KEY = 'karaoke_tv_id';
+const TV_BEAT_MS = 8000;
+function tvId(): string {
+  try {
+    const saved = sessionStorage.getItem(TV_ID_KEY);
+    if (saved && /^[A-Za-z0-9_-]{8,64}$/.test(saved)) return saved;
+  } catch {}
+  const id = `tv${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  try {
+    sessionStorage.setItem(TV_ID_KEY, id);
+  } catch {}
+  return id;
+}
 
 // Survives the screen being rebuilt after an error (same page, sound already allowed).
 let startedOnce = false;
@@ -127,7 +148,10 @@ function markStarted() {
 }
 // After a reload without a click, Chrome may refuse to play with sound. Then the video plays muted
 // (better than a stopped queue) and the screen asks for one click to turn the sound on.
-const SOUND_CHECK_AFTER = 5000;
+// Generous: a slow connection or an ad before the song also keeps the video "not started" a while.
+const SOUND_CHECK_AFTER = 12000;
+// Playing muted: each song tries the sound again this long after it starts moving.
+const SOUND_RETRY_AFTER = 1500;
 const hasUserClicked = () => (navigator as any).userActivation?.hasBeenActive === true;
 
 export default function TvPage() {
@@ -145,6 +169,12 @@ export default function TvPage() {
 function Tv({ onLogout }: { onLogout: () => void }) {
   const { queue, singers, settings, results, ranking, loaded, refresh } = useLive({ tv: true });
   const [started, setStarted] = useState(startedOnce);
+  // 'owner' plays the karaoke; 'mirror' is a second screen that only shows the queue
+  const [role, setRole] = useState<'owner' | 'mirror'>('owner');
+  const roleRef = useRef(role);
+  roleRef.current = role;
+  const tvIdRef = useRef('');
+  const [takingOver, setTakingOver] = useState(false);
   const [muted, setMuted] = useState(false); // playing without sound: waiting for a click
   const [showSettings, setShowSettings] = useState(false);
   const [origin, setOrigin] = useState('');
@@ -185,6 +215,8 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const soundTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mutedRef = useRef(false);
+  const loadedAt = useRef(0); // when the player was last told to load a video
+  const soundTried = useRef<number | null>(null); // queue id whose sound was already retried
 
   useEffect(() => {
     setOrigin(window.location.origin);
@@ -215,6 +247,34 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     if (!onHold(settingsRef.current) && p.getPlayerState?.() !== 1) p.playVideo?.();
   }
 
+  /**
+   * Playing muted because Chrome held the sound once: every new song tries the sound again. If
+   * Chrome still refuses, it pauses the video; then it goes back to muted and keeps playing.
+   * So one false alarm (slow video, an ad) never leaves the whole night silent.
+   */
+  function trySoundAgain() {
+    const id = loadedVideo.current;
+    if (!mutedRef.current || id == null || soundTried.current === id) return;
+    soundTried.current = id;
+    setTimeout(() => {
+      const p = playerRef.current;
+      if (!p || !mutedRef.current || loadedVideo.current !== id || onHold(settingsRef.current)) return;
+      if (p.getPlayerState?.() !== 1) return;
+      p.unMute?.();
+      p.setVolume?.(settingsRef.current?.volume ?? 100);
+      setTimeout(() => {
+        const pl = playerRef.current;
+        if (!pl || loadedVideo.current !== id || !mutedRef.current) return;
+        const st = pl.getPlayerState?.();
+        if (st === 1 || st === 3) {
+          // the sound is allowed now
+          mutedRef.current = false;
+          setMuted(false);
+        } else if (!onHold(settingsRef.current)) goMuted();
+      }, 1500);
+    }, SOUND_RETRY_AFTER);
+  }
+
   const playing = queue.find((q) => q.status === 'playing') ?? null;
   const waiting = queue.filter((q) => q.status === 'waiting' && singers[q.singer_id]?.status === 'approved');
   const pendingCount = queue.filter((q) => q.status === 'waiting' && singers[q.singer_id]?.status === 'pending').length;
@@ -241,11 +301,14 @@ function Tv({ onLogout }: { onLogout: () => void }) {
    * server ignores the request if it is another one). Returns true when the server answered.
    */
   async function advance(endStatus: 'done' | 'skipped', id: number | null, retry = true): Promise<boolean> {
-    if (retry && id != null) pending.current = { id, endStatus };
+    if (roleRef.current !== 'owner') return false;
+    // another request is on its way: this one is dropped, not stored (the watchdog sees again
+    // anything that really needs the queue to move)
     if (advancing.current) return false;
+    if (retry && id != null) pending.current = { id, endStatus };
     advancing.current = true;
     try {
-      await post('/api/player', { current: id, endStatus });
+      await post('/api/player', { current: id, endStatus, tv: tvIdRef.current });
       if (pending.current?.id === id) pending.current = null;
       void refresh();
       return true;
@@ -253,6 +316,11 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       console.error(e);
       // logged out (password changed, cookies cleared): without this the queue would stop silently
       if ((e as ApiError).status === 401) onLogout();
+      // another screen took over the karaoke: this one becomes a mirror
+      if ((e as ApiError).status === 409) {
+        pending.current = null;
+        setRole('mirror');
+      }
       return false;
     } finally {
       setTimeout(() => (advancing.current = false), 1000);
@@ -314,6 +382,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     const p = playerRef.current;
     if (!p || loadedVideo.current !== item.id) return;
     videoStarted.current = true;
+    loadedAt.current = Date.now();
     health.current = { everPlayed: false, lastTime: startSeconds, stalledMs: 0, reloads: 0, errors: 0 };
     p.setVolume?.(settingsRef.current?.volume ?? 100);
     // on hold (paused, or contest results on screen): get it ready without a burst of sound
@@ -340,6 +409,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     if (!p || !playerReady.current || !cur || !videoStarted.current || loadedVideo.current !== cur.id) return;
     const h = health.current;
     h.reloads += 1;
+    loadedAt.current = Date.now();
     p.loadVideoById({ videoId: cur.video_id, startSeconds: h.lastTime > 3 ? Math.floor(h.lastTime) : 0 });
   }
 
@@ -408,8 +478,9 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   }
 
   // create the player once the user has clicked "start" (needed so the browser allows sound)
+  const isOwner = role === 'owner';
   useEffect(() => {
-    if (!started) return;
+    if (!started || !isOwner) return;
     startedOnce = true;
     markStarted();
     let cancelled = false;
@@ -447,6 +518,8 @@ function Tv({ onLogout }: { onLogout: () => void }) {
               // admin paused from the phone while the video was still loading
               if (e.data === YT.PlayerState.PLAYING && onHold(settingsRef.current)) playerRef.current?.pauseVideo?.();
               if (e.data === YT.PlayerState.PLAYING) {
+                // it is moving: whatever the watchdog counted while it waited starts over
+                health.current.stalledMs = 0;
                 // loading a video puts the speed back to normal: apply the chosen one again
                 try {
                   if (rateRef.current !== 1) playerRef.current?.setPlaybackRate?.(rateRef.current);
@@ -455,8 +528,15 @@ function Tv({ onLogout }: { onLogout: () => void }) {
                   ccAppliedTo.current = loadedVideo.current;
                   applyCaptions(true);
                 }
+                trySoundAgain();
               }
-              if (e.data === YT.PlayerState.ENDED && videoStarted.current && loadedVideo.current != null) {
+              // an "ended" right after loading belongs to the previous video
+              if (
+                e.data === YT.PlayerState.ENDED &&
+                videoStarted.current &&
+                loadedVideo.current != null &&
+                Date.now() - loadedAt.current > LOAD_GRACE
+              ) {
                 writeProgress(null);
                 void advance('done', loadedVideo.current);
               }
@@ -505,7 +585,48 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       videoStarted.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started, ytControls]);
+  }, [started, ytControls, isOwner]);
+
+  // "I am the projector": claimed when the screen opens and renewed every few seconds. Any doubt
+  // (no answer, database not updated) keeps this screen playing: only a clear "another screen is in
+  // charge" turns it into a mirror.
+  useEffect(() => {
+    tvIdRef.current = tvId();
+    let stop = false;
+    const beat = async () => {
+      try {
+        const d = await post('/api/tv', { id: tvIdRef.current });
+        if (stop) return;
+        if (d?.owner === false) setRole('mirror');
+        else if (d?.owner === true && roleRef.current === 'mirror') setRole('owner'); // the other screen closed
+      } catch (e) {
+        if ((e as ApiError).status === 401) onLogout();
+      }
+    };
+    void beat();
+    const t = setInterval(() => void beat(), TV_BEAT_MS);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function takeOver() {
+    setTakingOver(true);
+    try {
+      const d = await post('/api/tv', { id: tvIdRef.current, force: true });
+      if (d?.owner !== false) {
+        setRole('owner');
+        setStarted(true);
+      }
+    } catch (e) {
+      if ((e as ApiError).status === 401) onLogout();
+      else flash((e as Error).message);
+    } finally {
+      setTakingOver(false);
+    }
+  }
 
   // When the projector opens (and every few minutes while it is on): if the bar closed and opened
   // again, the queue of the night before is cleaned. Nothing starts playing before the first check
@@ -538,12 +659,12 @@ function Tv({ onLogout }: { onLogout: () => void }) {
 
   // react to queue changes
   useEffect(() => {
-    if (!started || !loaded || !nightReady) return;
+    if (!started || !loaded || !nightReady || !isOwner) return;
     if (pending.current && pending.current.id !== playing?.id) pending.current = null;
     syncPlayer();
     if (!playing && waiting.length > 0) void advance('done', null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started, loaded, nightReady, playing?.id, waiting.length]);
+  }, [started, loaded, nightReady, playing?.id, waiting.length, isOwner]);
 
   // Night ranking: when a song ends, the database grades it from the reactions it got. Show the
   // grade for a few seconds (it sits on top of the "next singer" countdown).
@@ -578,7 +699,6 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const gifsOn = !!settings?.gifs_enabled;
   useEffect(() => {
     if (!gifsOn) return;
-    const sb = browserClient();
     const line: TvGif[] = [];
     let showing = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -588,20 +708,17 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       setGif(g ?? null);
       if (g) timer = setTimeout(next, GIF_MS);
     };
-    const ch = sb
-      .channel('karaoke-gifs')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tv_gifs' }, (payload) => {
-        const r = payload.new as { id?: number; kind?: string; ref?: string; name?: string };
-        const ref = String(r.ref ?? '');
-        const ok = r.kind === 'gif' ? isGifUrl(ref) : r.kind === 'sticker' && STICKERS.some((s) => s.key === ref);
-        // a burst never piles up: at most 4 waiting
-        if (!ok || line.length >= 4) return;
-        line.push({ id: Number(r.id) || Date.now(), kind: r.kind as 'gif' | 'sticker', ref, name: String(r.name ?? '').slice(0, 40) });
-        if (!showing) next();
-      })
-      .subscribe();
+    const stopListening = listenInserts('tv_gifs', (raw) => {
+      const r = raw as { id?: number; kind?: string; ref?: string; name?: string };
+      const ref = String(r.ref ?? '');
+      const ok = r.kind === 'gif' ? isGifUrl(ref) : r.kind === 'sticker' && STICKERS.some((s) => s.key === ref);
+      // a burst never piles up: at most 4 waiting
+      if (!ok || line.length >= 4) return;
+      line.push({ id: Number(r.id) || Date.now(), kind: r.kind as 'gif' | 'sticker', ref, name: String(r.name ?? '').slice(0, 40) });
+      if (!showing) next();
+    });
     return () => {
-      sb.removeChannel(ch).catch(() => {});
+      stopListening();
       if (timer) clearTimeout(timer);
       setGif(null);
     };
@@ -644,13 +761,10 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const reactionsOn = !!settings?.reactions_enabled;
   useEffect(() => {
     if (!reactionsOn) return;
-    const sb = browserClient();
     let n = 0;
     const timers = new Set<ReturnType<typeof setTimeout>>();
-    const ch = sb
-      .channel('karaoke-reactions')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reactions' }, (payload) => {
-        const emoji = REACTIONS.find((r) => r.key === (payload.new as { emoji?: string }).emoji)?.emoji;
+    const stopListening = listenInserts('reactions', (row) => {
+        const emoji = REACTIONS.find((r) => r.key === (row as { emoji?: string }).emoji)?.emoji;
         if (!emoji) return;
         const id = ++n;
         const dur = 3.2 + Math.random() * 1.6;
@@ -661,10 +775,9 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           setFloaters((f) => f.filter((x) => x.id !== id));
         }, dur * 1000 + 100);
         timers.add(t);
-      })
-      .subscribe();
+    });
     return () => {
-      sb.removeChannel(ch).catch(() => {});
+      stopListening();
       timers.forEach(clearTimeout);
       setFloaters([]);
     };
@@ -694,7 +807,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   // Watchdog. Every few seconds: save progress, enforce the time limit, and get the karaoke moving
   // again by itself if anything is stuck (lost request, frozen video, video that never started).
   useEffect(() => {
-    if (!started) return;
+    if (!started || !isOwner) return;
     const t = setInterval(() => {
       if (!loadedRef.current || !nightReadyRef.current) return;
       const cur = playingRef.current;
@@ -712,12 +825,21 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       }
       const p = playerRef.current;
       if (!p?.getCurrentTime || !playerReady.current || !videoStarted.current || loadedVideo.current !== cur.id) return;
+      // Just loaded: the player may still be showing the previous video's state and time, so
+      // nothing is ended from those readings. And if the player says which video it has, it must
+      // be this song's.
+      const settling = Date.now() - loadedAt.current < LOAD_GRACE;
+      let onScreen = '';
+      try {
+        onScreen = String(p.getVideoData?.()?.video_id ?? '');
+      } catch {}
+      const trusted = !settling && (!onScreen || onScreen === cur.video_id);
       const time = Number(p.getCurrentTime()) || 0;
       const state: number | undefined = p.getPlayerState?.();
       const max = settingsRef.current?.max_duration_sec ?? 360;
-      if (time > max + 15) return void advance('done', cur.id);
+      if (trusted && time > max + 15) return void advance('done', cur.id);
       // finished, but the "ended" event was lost
-      if (state === 0) return void advance('done', cur.id);
+      if (trusted && state === 0) return void advance('done', cur.id);
 
       const h = health.current;
       if (state === 1 && Math.abs(time - h.lastTime) > 0.2) {
@@ -730,15 +852,19 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         writeProgress({ id: cur.id, t: time });
         return;
       }
+      if (settling) return; // not moving yet: too early to call it stuck
       if (onHold(settingsRef.current)) return void (h.stalledMs = 0); // stopped on purpose
       if (!isOnline()) return; // no network at all: wait for it, never punish the singer
       h.stalledMs += TICK;
 
-      if (state === 2) {
-        // someone clicked the video and paused it by accident
+      if (state === 2 || state === 5) {
+        // paused by a stray click, or left ready but not playing (the "play" was lost when a
+        // pause or the ranking ended while the video was loading)
         if (h.stalledMs >= RESUME_PAUSED_AFTER) p.playVideo?.();
         return;
       }
+      // not started yet: one "play" nudge too, in case it was lost in the same way
+      if (state === -1 && !h.everPlayed && h.stalledMs === RESUME_PAUSED_AFTER) p.playVideo?.();
       if (h.everPlayed) {
         // froze in the middle (internet blinked): load it again at the same point, never skip
         if (h.stalledMs >= RELOAD_STALLED_AFTER) {
@@ -778,7 +904,37 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       window.removeEventListener('online', onOnline);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started]);
+  }, [started, isOwner]);
+
+  // A ranking or contest result left on screen holds the queue. With people waiting, it closes by
+  // itself after a few minutes (the admin can show it again any time).
+  const rankingShown = !!settings?.ranking_enabled && !!settings?.ranking_on_tv && !results;
+  const resultsShown = settings?.results_contest_id != null;
+  const holdingSomeone = (rankingShown || resultsShown) && waiting.length > 0 && isOwner && started;
+  useEffect(() => {
+    if (!holdingSomeone) return;
+    const t = setTimeout(() => {
+      const s = settingsRef.current;
+      if (s?.results_contest_id != null) void hideResults();
+      else if (s?.ranking_on_tv) void control({ rankingOnTv: false });
+    }, HOLD_AUTOCLOSE_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [holdingSomeone]);
+
+  async function hideResults() {
+    if (ctrlBusy) return;
+    setCtrlBusy(true);
+    try {
+      await post('/api/admin/contest', { action: 'hide' });
+      await refresh();
+    } catch (e) {
+      if ((e as ApiError).status === 401) onLogout();
+      else flash((e as Error).message);
+    } finally {
+      setCtrlBusy(false);
+    }
+  }
 
   // keep the projector PC awake while the karaoke screen is open
   useEffect(() => {
@@ -802,7 +958,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const nowName = playing ? singers[playing.singer_id]?.name ?? '' : '';
   const photoOf = (singerId: string | null | undefined) => (singerId ? photoUrl(singers[singerId], settings) : null);
   const open = settings?.queue_open ?? true;
-  const showVideo = !!playing && !intro;
+  const showVideo = !!playing && !intro && isOwner;
   const winner = results?.[0]?.score != null ? results[0] : null;
   const SHOWN = 8;
   const rankingOn = !!settings?.ranking_enabled;
@@ -952,9 +1108,14 @@ function Tv({ onLogout }: { onLogout: () => void }) {
                 ))}
               </ol>
             )}
+            {isOwner && (
+              <button className="btn small results-close" disabled={ctrlBusy} onClick={() => void hideResults()}>
+                Tirar do telão
+              </button>
+            )}
           </div>
         )}
-        {started && playing && !results && !showRanking && videoMenu && (
+        {started && isOwner && playing && !results && !showRanking && videoMenu && (
           <div className={`video-menu${ytControls ? ' raised' : ''}`} role="dialog" aria-label="Opções do vídeo">
             <div className="vm-row">
               <span>Velocidade</span>
@@ -989,7 +1150,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             </small>
           </div>
         )}
-        {started && playing && !results && !showRanking && (
+        {started && isOwner && playing && !results && !showRanking && (
           <div className={`tv-controls${ytControls ? ' raised' : ''}${videoMenu ? ' open' : ''}`}>
             <button
               aria-label={settings?.paused ? 'Continuar' : 'Pausar'}
@@ -1012,13 +1173,25 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         )}
         {notice && <div className="toast">{notice}</div>}
 
-        {started && muted && (
+        {started && isOwner && muted && (
           <button className="sound-overlay" onClick={unmute}>
             <span>🔇 Clique na tela pra ligar o som</span>
           </button>
         )}
 
-        {!started && (
+        {!isOwner && (
+          <div className="mirror-overlay" role="dialog" aria-label="Segundo telão">
+            <span className="eyebrow">📺 Segundo telão</span>
+            <h2>Outro telão tá tocando o karaokê</h2>
+            <p>Aqui só mostra a fila, sem vídeo e sem som, pra não cortar a música de ninguém.</p>
+            <button className="btn primary" disabled={takingOver} onClick={() => void takeOver()}>
+              {takingOver ? 'Assumindo…' : 'Assumir o telão aqui'}
+            </button>
+            <small>Use só se o outro telão desligou ou travou. Ele vira o espelho.</small>
+          </div>
+        )}
+
+        {!started && isOwner && (
           <button className="start-overlay" onClick={() => setStarted(true)}>
             <span className="start-btn">
               <Icon name="play" size={40} />

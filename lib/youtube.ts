@@ -1,6 +1,6 @@
 import 'server-only';
 import type { SearchResult } from './types';
-import { withTimeout } from './timeout';
+import { timeoutSignal, withTimeout } from './timeout';
 
 // Busca sem chave de API usando a mesma interface interna do site do YouTube (youtubei.js).
 // Não é oficial: se parar de funcionar, troque esta função pela YouTube Data API.
@@ -20,7 +20,8 @@ async function yt(): Promise<Yt> {
   return ytPromise;
 }
 
-export const KARAOKE_RE = /karaok[eê]|videok[eê]|sing ?along|vers[aã]o karaok/i;
+import { KARAOKE_RE } from './song';
+export { KARAOKE_RE };
 
 const cache = new Map<string, { at: number; results: SearchResult[] }>();
 const CACHE_MS = 30 * 60 * 1000;
@@ -95,42 +96,127 @@ export interface LinkedVideo extends SearchResult {
 }
 
 const linkCache = new Map<string, { at: number; video: LinkedVideo | null }>();
+const LINK_BUDGET_MS = 18000; // the phone gives up at 24 s
 
-/** Title and length of one video, for a link the customer pasted. Null when the video does not exist. */
+function remember(videoId: string, video: LinkedVideo | null) {
+  linkCache.set(videoId, { at: Date.now(), video });
+  if (linkCache.size > 500) linkCache.delete(linkCache.keys().next().value!);
+}
+
+/** ISO 8601 duration (PT4M13S) in seconds. */
+function isoSeconds(d: string): number {
+  const m = /^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(d ?? '');
+  if (!m) return 0;
+  return (+(m[1] ?? 0)) * 86400 + (+(m[2] ?? 0)) * 3600 + (+(m[3] ?? 0)) * 60 + (+(m[4] ?? 0));
+}
+
+/**
+ * With YOUTUBE_API_KEY set on Vercel, the official YouTube Data API answers first (free key, made
+ * for servers, not blocked like the unofficial one). `undefined` = could not ask; `null` = YouTube
+ * says the video does not exist.
+ */
+async function officialVideo(videoId: string): Promise<LinkedVideo | null | undefined> {
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) return undefined;
+  try {
+    const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status&id=${videoId}&key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url, { signal: timeoutSignal(5000), cache: 'no-store' });
+    if (!res.ok) return undefined;
+    const d = await res.json();
+    const item = d?.items?.[0];
+    if (!item) return null;
+    const durationSec = isoSeconds(item.contentDetails?.duration ?? '');
+    const live = item.snippet?.liveBroadcastContent && item.snippet.liveBroadcastContent !== 'none';
+    return {
+      videoId,
+      title: String(item.snippet?.title ?? ''),
+      thumbnail: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+      durationSec,
+      channel: String(item.snippet?.channelTitle ?? ''),
+      embeddable: item.status?.embeddable !== false,
+      live: !!live || durationSec === 0,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Plan B without a key: search YouTube for the id itself (the search is blocked less often). */
+async function videoFromSearch(videoId: string): Promise<LinkedVideo | null> {
+  const res = await searchOnce(videoId);
+  for (const v of res.videos) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const video = v as any;
+    if (video.id !== videoId) continue;
+    const durationSec: number = video.duration?.seconds ?? 0;
+    if (!durationSec && !video.is_live) continue;
+    return {
+      videoId,
+      title: video.title?.text ?? video.title?.toString?.() ?? '',
+      thumbnail: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+      durationSec,
+      channel: video.author?.name ?? '',
+      embeddable: true, // checked again when the song is picked (lib/embed.ts)
+      live: !!(video.is_live || video.is_upcoming),
+    };
+  }
+  return null;
+}
+
+/**
+ * Title and length of one video, for a link the customer pasted. Null when the video does not
+ * exist. Throws when YouTube could not be asked (nothing is remembered then).
+ */
 export async function videoById(videoId: string): Promise<LinkedVideo | null> {
   const hit = linkCache.get(videoId);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.video;
-  const once = async () => {
-    const client = await withTimeout(yt(), 8000);
+  const startedAt = Date.now();
+  const left = () => LINK_BUDGET_MS - (Date.now() - startedAt);
+
+  const official = await officialVideo(videoId);
+  if (official !== undefined) {
+    remember(videoId, official);
+    return official;
+  }
+
+  // the unofficial way: video details first
+  try {
+    const client = await withTimeout(yt(), Math.min(8000, left()));
+    let info;
     try {
-      return await withTimeout(client.getBasicInfo(videoId), 7000);
+      info = await withTimeout(client.getBasicInfo(videoId), Math.min(7000, left()));
     } catch (e) {
       ytPromise = null;
       throw e;
     }
-  };
-  let info;
-  try {
-    info = await once();
-  } catch (first) {
-    console.error('video info failed', first);
-    info = await once();
+    const b = info.basic_info;
+    const status = info.playability_status?.status;
+    if (b?.title && b.duration && status !== 'ERROR' && status !== 'LOGIN_REQUIRED') {
+      const video: LinkedVideo = {
+        videoId,
+        title: b.title,
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+        durationSec: b.duration,
+        channel: b.author ?? b.channel?.name ?? '',
+        embeddable: info.playability_status?.embeddable !== false,
+        live: !!(b.is_live || b.is_upcoming),
+      };
+      remember(videoId, video);
+      return video;
+    }
+    // only a clear "this video does not exist" is remembered as not found
+    if (status === 'ERROR' && !b?.title) {
+      remember(videoId, null);
+      return null;
+    }
+  } catch (e) {
+    console.error('video info failed', e);
   }
-  const b = info.basic_info;
-  const status = info.playability_status?.status;
-  let video: LinkedVideo | null = null;
-  if (b?.title && b.duration && status !== 'ERROR') {
-    video = {
-      videoId,
-      title: b.title,
-      thumbnail: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-      durationSec: b.duration,
-      channel: b.author ?? b.channel?.name ?? '',
-      embeddable: info.playability_status?.embeddable !== false,
-      live: !!(b.is_live || b.is_upcoming),
-    };
-  }
-  linkCache.set(videoId, { at: Date.now(), video });
-  if (linkCache.size > 500) linkCache.delete(linkCache.keys().next().value!);
-  return video;
+
+  // blocked ("confirm you are not a robot") or odd answer: try the search, if there is time left
+  if (left() < 3000) throw new Error('link lookup out of time');
+  const found = await withTimeout(videoFromSearch(videoId), left());
+  if (found) remember(videoId, found);
+  // not found by the search is not proof the video does not exist: not remembered
+  return found;
 }

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSettings } from '@/lib/supabase-server';
-import { isAdmin } from '@/lib/auth';
+import { requireAdmin } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
 import { autoResetNight, resetNightNow } from '@/lib/night';
 
@@ -12,7 +12,8 @@ export const dynamic = 'force-dynamic';
  * configured hour has passed and nobody sang in the last 45 minutes.
  */
 export async function POST(req: NextRequest) {
-  if (!(await isAdmin())) return fail('Faça login no admin', 401);
+  const denied = await requireAdmin();
+  if (denied) return denied;
   const action = String((await readBody(req)).action ?? '');
   if (action === 'reset') {
     try {

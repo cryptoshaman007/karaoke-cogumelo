@@ -1,13 +1,14 @@
 import { NextRequest } from 'next/server';
 import { db, getSettings, isMissingSchema, NEEDS_MIGRATION } from '@/lib/supabase-server';
-import { isAdmin } from '@/lib/auth';
+import { requireAdmin } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
 
 export const dynamic = 'force-dynamic';
 
 /** Live (partial) ranking of the contest that is running. Only the admin sees it before the end. */
 export async function GET() {
-  if (!(await isAdmin())) return fail('Faça login no admin', 401);
+  const denied = await requireAdmin();
+  if (denied) return denied;
   let settings;
   try {
     settings = await getSettings();
@@ -21,7 +22,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await isAdmin())) return fail('Faça login no admin', 401);
+  const denied = await requireAdmin();
+  if (denied) return denied;
   const action = String((await readBody(req)).action ?? '');
   const sb = db();
   const done = (error: { code?: string; message: string } | null, extra: Record<string, unknown> = {}) =>

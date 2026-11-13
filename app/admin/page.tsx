@@ -8,6 +8,9 @@ import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
 import { fmt, get, post, useLive, type ApiError } from '@/lib/useLive';
 import { photoUrl, type SearchResult, type Standing } from '@/lib/types';
+import { KARAOKE_RE } from '@/lib/song';
+
+const nameKey = (n: string) => n.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
 
 export default function AdminPage() {
   const [admin, setAdmin] = useAdmin();
@@ -120,6 +123,29 @@ function Panel({ onLogout }: { onLogout: () => void }) {
   const blocked = all.filter((s) => s.status === 'blocked');
   const withPhoto = settings.photos_enabled ? all.filter((s) => s.status !== 'blocked' && s.photo_at) : [];
   const songOf = (singerId: string) => waiting.find((q) => q.singer_id === singerId);
+  // a name already used tonight by someone else: maybe the same person on another phone (or a refused one back)
+  const nameCount = new Map<string, number>();
+  for (const s of all) nameCount.set(nameKey(s.name), (nameCount.get(nameKey(s.name)) ?? 0) + 1);
+  const repeated = (name: string) => (nameCount.get(nameKey(name)) ?? 0) > 1;
+  const holding = (settings.results_contest_id != null || (settings.ranking_enabled && settings.ranking_on_tv)) && waiting.length > 0;
+
+  function refuse(id: string, name: string) {
+    if (!confirm(`Recusar ${name}? A música e as reservas dessa pessoa saem da fila e não voltam se você liberar depois.`)) return;
+    void act('/api/admin/singers', { id, status: 'blocked' });
+  }
+  function removeFromQueue(id: number, name: string) {
+    if (!confirm(`Tirar ${name} da fila?`)) return;
+    void queueAct({ action: 'remove', id });
+  }
+  function refuseAll() {
+    if (!confirm(`Recusar as ${pending.length} pessoas que estão esperando ok? Use quando entrar um monte de nome falso.`)) return;
+    void act('/api/admin/singers', { action: 'refuseAllPending' });
+  }
+  async function logoutAll() {
+    if (!confirm('Sair de todos os aparelhos? O telão também vai pedir a senha de novo. Use se perdeu um celular que tava logado.')) return;
+    await post('/api/admin/logout', { all: true }).catch(() => {});
+    onLogout();
+  }
   const vol = volume ?? settings.volume;
 
   return (
@@ -140,12 +166,19 @@ function Panel({ onLogout }: { onLogout: () => void }) {
           <h2>
             Esperando seu ok <span className="count-pill">{pending.length}</span>
           </h2>
+          {pending.length > 3 && (
+            <button className="btn danger small self-start" disabled={busy} onClick={refuseAll}>
+              Recusar todos
+            </button>
+          )}
           <ul className="rows">
             {pending.map((s) => (
               <li key={s.id}>
                 <Avatar src={photoUrl(s, settings)} size={40} />
                 <div className="grow">
-                  <strong>{s.name}</strong>
+                  <strong>
+                    {s.name} {repeated(s.name) && <em className="tag warn-tag">nome repetido</em>}
+                  </strong>
                   <span className="muted small">{songOf(s.id)?.title ?? 'ainda escolhendo a música'}</span>
                 </div>
                 <button className="btn primary small" disabled={busy} onClick={() => act('/api/admin/singers', { id: s.id, status: 'approved' })}>
@@ -155,7 +188,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
                   className="btn danger small icon-only"
                   aria-label={`Recusar ${s.name}`}
                   disabled={busy}
-                  onClick={() => act('/api/admin/singers', { id: s.id, status: 'blocked' })}
+                  onClick={() => refuse(s.id, s.name)}
                 >
                   <Icon name="close" />
                 </button>
@@ -221,7 +254,12 @@ function Panel({ onLogout }: { onLogout: () => void }) {
                 <span className="pos">{i + 1}</span>
                 <div className="grow">
                   <strong>
-                    {s?.name ?? '…'} {s?.status === 'pending' && <em className="tag">esperando ok</em>}
+                    {s?.name ?? '…'} {s?.status === 'pending' && <em className="tag">esperando ok</em>}{' '}
+                    {!KARAOKE_RE.test(q.title) && (
+                      <em className="tag warn-tag" title="O título não parece versão karaokê: pode ter a voz do cantor original">
+                        não parece karaokê
+                      </em>
+                    )}
                   </strong>
                   <span className="muted small">
                     {q.title} · {fmt(q.duration_sec)}
@@ -257,7 +295,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
                     className="btn small icon-only danger"
                     aria-label="Tirar da fila"
                     disabled={busy}
-                    onClick={() => queueAct({ action: 'remove', id: q.id })}
+                    onClick={() => removeFromQueue(q.id, s?.name ?? 'essa pessoa')}
                   >
                     <Icon name="close" />
                   </button>
@@ -298,6 +336,9 @@ function Panel({ onLogout }: { onLogout: () => void }) {
         {settings.ranking_enabled && (
           <>
             {settings.contest_id && <p className="muted small">Pausado enquanto o campeonato tá valendo (lá o que conta são os votos).</p>}
+            {settings.ranking_on_tv && holding && (
+              <p className="banner warn">Tem gente esperando pra cantar: o telão fecha o ranking sozinho em 3 minutos.</p>
+            )}
             {!settings.reactions_enabled && <p className="banner warn">As reações estão desligadas, então ninguém consegue dar nota. Liga elas nas configurações.</p>}
             <Ranking rows={ranking} limit={10} highlightFirst unit="reactions" empty="Ninguém pontuou ainda nessa noite." />
             <button className="btn self-start" disabled={busy} onClick={() => setting({ rankingOnTv: !settings.ranking_on_tv })}>
@@ -326,6 +367,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
         ) : results ? (
           <>
             <p className="muted small">Resultado final. Tá aparecendo no telão e nos celulares.</p>
+            {holding && <p className="banner warn">Tem gente esperando pra cantar: o telão tira o resultado sozinho em 3 minutos.</p>}
             <Ranking rows={results} highlightFirst />
             <div className="row">
               <button className="btn" disabled={busy} onClick={() => contest('hide')}>
@@ -426,7 +468,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
               <option value={settings.night_reset_hour}>Todo dia às {settings.night_reset_hour}h</option>
             )}
           </select>
-          <span className="small">Só limpa se ninguém cantou nos últimos 45 minutos, então nunca corta a festa no meio.</span>
+          <span className="small">Só limpa se ninguém cantou nem pediu música nos últimos 45 minutos, então nunca corta a festa no meio.</span>
         </div>
         <label className="switch">
           <input type="checkbox" checked={settings.tv_add_enabled} onChange={(e) => setting({ tvAddEnabled: e.target.checked })} />
@@ -530,6 +572,10 @@ function Panel({ onLogout }: { onLogout: () => void }) {
           </ul>
         </details>
       )}
+
+      <button className="btn ghost small self-start" onClick={logoutAll}>
+        Sair de todos os aparelhos
+      </button>
     </main>
   );
 }

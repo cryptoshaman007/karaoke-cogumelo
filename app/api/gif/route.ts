@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { db, isMissingSchema, NEEDS_MIGRATION } from '@/lib/supabase-server';
 import { hashToken, singerFromRequest } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
-import { recordHit, tooMany } from '@/lib/rate';
+import { allow } from '@/lib/rate';
 import { gifSearchEnabled, gifUrl, searchGifs } from '@/lib/gifs';
 import { STICKERS } from '@/lib/types';
 
@@ -21,8 +21,7 @@ export async function GET(req: NextRequest) {
   const q = (req.nextUrl.searchParams.get('q') ?? '').trim().slice(0, 50);
   const key = `gifsearch:${singer.id}`;
   if (q) {
-    if (await tooMany(key, 12, 60)) return fail('Calma aí! Espera um pouquinho pra buscar de novo.', 429);
-    void recordHit(key);
+    if (!(await allow([{ key, max: 12, windowSec: 60 }], true))) return fail('Calma aí! Espera um pouquinho pra buscar de novo.', 429);
   }
   try {
     return json({ search: true, results: await searchGifs(q) });
