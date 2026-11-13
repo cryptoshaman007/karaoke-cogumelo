@@ -152,7 +152,11 @@ function Room({ me, token }: { me: Singer; token: string }) {
     return () => clearInterval(t);
   }, []);
 
-  const self = singers[me.id] ?? me;
+  // After a selfie the photo must show up right away, even for someone who came on an earlier night:
+  // the public read only lists people from tonight, so their own row may not come with the live data.
+  const [ownPhotoAt, setOwnPhotoAt] = useState<string | null | undefined>(undefined);
+  const listed = singers[me.id];
+  const self = listed ?? (ownPhotoAt === undefined ? me : { ...me, photo_at: ownPhotoAt });
   const playing = queue.find((q) => q.status === 'playing') ?? null;
   const line = queue.filter((q) => q.status === 'waiting' && singers[q.singer_id]?.status === 'approved');
   const entry = queue.find((q) => q.singer_id === me.id) ?? null;
@@ -317,7 +321,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
           <strong>Karaokê Cogumelo</strong>
         </div>
         <span className="chip with-avatar">
-          <Avatar src={myPhoto} size={22} />
+          <Avatar src={myPhoto} seed={me.id} size={22} />
           {self.name}
         </span>
       </header>
@@ -354,7 +358,14 @@ function Room({ me, token }: { me: Singer; token: string }) {
         </section>
       )}
 
-      {photosOn && self.status !== 'blocked' && <SelfieCard token={token} photo={myPhoto} onChange={refresh} />}
+      {photosOn && self.status !== 'blocked' && <SelfieCard
+          token={token}
+          photo={myPhoto}
+          onChange={async (photoAt) => {
+            setOwnPhotoAt(photoAt);
+            await refresh();
+          }}
+        />}
 
       {results && (
         <section className="card contest">
@@ -485,7 +496,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
             {playing && (
               <li className={playing.singer_id === me.id ? 'me' : ''}>
                 <span className="pos live">♪</span>
-                <Avatar src={photoOf(playing.singer_id)} size={34} />
+                <Avatar src={photoOf(playing.singer_id)} seed={playing.singer_id} size={34} />
                 <div className="grow">
                   <strong>{singers[playing.singer_id]?.name ?? '…'}</strong>
                   <span className="muted small">{playing.title}</span>
@@ -495,7 +506,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
             {line.slice(0, 15).map((q, i) => (
               <li key={q.id} className={q.singer_id === me.id ? 'me' : ''}>
                 <span className="pos">{i + 1}</span>
-                <Avatar src={photoOf(q.singer_id)} size={34} />
+                <Avatar src={photoOf(q.singer_id)} seed={q.singer_id} size={34} />
                 <div className="grow">
                   <strong>{singers[q.singer_id]?.name ?? '…'}</strong>
                   <span className="muted small">{q.title}</span>
@@ -553,7 +564,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
 }
 
 /** Optional selfie: shows on the projector next to the name, in the queue and in the ranking. */
-function SelfieCard({ token, photo, onChange }: { token: string; photo: string | null; onChange: () => Promise<void> }) {
+function SelfieCard({ token, photo, onChange }: { token: string; photo: string | null; onChange: (photoAt: string | null) => Promise<void> }) {
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -572,8 +583,8 @@ function SelfieCard({ token, photo, onChange }: { token: string; photo: string |
     setErr('');
     try {
       const jpeg = await selfieJpeg(file);
-      await post('/api/photo', { jpeg }, { 'x-singer-token': token });
-      await onChange();
+      const d = await post('/api/photo', { jpeg }, { 'x-singer-token': token });
+      await onChange(typeof d?.photoAt === 'string' ? d.photoAt : new Date().toISOString());
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -586,7 +597,7 @@ function SelfieCard({ token, photo, onChange }: { token: string; photo: string |
     setErr('');
     try {
       await del('/api/photo', { 'x-singer-token': token });
-      await onChange();
+      await onChange(null);
     } catch (e) {
       setErr((e as Error).message);
     } finally {

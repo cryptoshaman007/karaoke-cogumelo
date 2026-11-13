@@ -1135,7 +1135,9 @@ await test('selfie: aparece no telão (vez da pessoa, palco e fila) e banco sem 
   await shot(page, 'tv-selfie-vez');
   expect((await until(page, async () => (await yt(page)).state === 1, 20000)) >= 0, 'a música não tocou');
   expect((await page.locator('.side .now .avatar').count()) === 1, 'sem foto em "No palco agora"');
-  expect((await page.locator('.side .list .avatar').count()) === 0, 'Bia não tem foto e apareceu uma');
+  // Bia has no selfie: a drawing instead of a photo, never an empty circle
+  expect((await page.locator('.side .list img.avatar').count()) === 0, 'Bia não tem foto e apareceu uma');
+  expect((await page.locator('.side .list .avatar.fun').count()) === 1, 'Bia sem foto ficou sem desenho');
   await ctx.close();
 
   // same night, database without update 006: the select with photo_at fails, the screen keeps working
@@ -1155,7 +1157,7 @@ await test('celular: tirar selfie manda uma foto pequena, mostra no celular e d�
   const { page, ctx, errors } = await openPhone(b);
   expect((await until(page, async () => (await page.getByText('Quer aparecer no telão?').count()) === 1, 5000)) >= 0, 'sem convite pra selfie');
   await shot(page, 'celular-selfie-convite');
-  await page.locator('.selfie-card input[type=file]').setInputFiles(new URL('./fixtures-selfie.jpg', import.meta.url).pathname);
+  await page.locator('.selfie-card input[type=file]').setInputFiles((await import('url')).fileURLToPath(new URL('./fixtures-selfie.jpg', import.meta.url)));
   expect((await until(page, async () => (b.photoPosts ?? []).length === 1, 8000, 100)) >= 0, 'a foto não foi enviada');
   const sent = b.photoPosts[0];
   expect(sent.startsWith('data:image/jpeg;base64,') && sent.length < 110000, `foto em formato errado (${sent.slice(0, 30)}…, ${sent.length} letras)`);
@@ -1165,6 +1167,24 @@ await test('celular: tirar selfie manda uma foto pequena, mostra no celular e d�
   await page.getByRole('button', { name: 'Apagar minha foto' }).click();
   expect((await until(page, async () => (await page.getByText('Sua foto tá no telão').count()) === 0, 5000)) >= 0, 'a foto não saiu');
   expect(b.apiCalls.some((c) => c.path === '/api/photo' && c.method === 'DELETE'), 'não pediu para apagar');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('celular: cliente de outra noite tira selfie e a foto aparece na hora no próprio celular', async () => {
+  const b = makeBackend();
+  b.settings.photos_enabled = true;
+  const { page, ctx, errors } = await openPhone(b);
+  // the public read (migration 008) only lists people from tonight: this phone's own row never comes
+  await page.route(/fake\.supabase\.co\/rest\/v1\/singers/, (route) =>
+    route.request().method() === 'GET' ? route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }) : route.fallback(),
+  );
+  expect((await until(page, async () => (await page.getByText('Quer aparecer no telão?').count()) === 1, 5000)) >= 0, 'sem convite pra selfie');
+  await page.locator('.selfie-card input[type=file]').setInputFiles((await import('url')).fileURLToPath(new URL('./fixtures-selfie.jpg', import.meta.url)));
+  expect((await until(page, async () => (b.photoPosts ?? []).length === 1, 8000, 100)) >= 0, 'a foto não foi enviada');
+  expect((await until(page, async () => (await page.getByText('Sua foto tá no telão').count()) === 1, 5000)) >= 0, 'a foto não apareceu no celular de quem voltou');
+  await page.getByRole('button', { name: 'Apagar minha foto' }).click();
+  expect((await until(page, async () => (await page.getByText('Sua foto tá no telão').count()) === 0, 5000)) >= 0, 'a foto não saiu');
   expect(errors.length === 0, errors.join('; '));
   await ctx.close();
 });

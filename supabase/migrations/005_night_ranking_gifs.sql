@@ -158,7 +158,7 @@ begin
 
   -- as músicas de reserva (migração 004) também são da noite que acabou
   if to_regclass('public.reserves') is not null then
-    execute 'delete from public.reserves';
+    execute 'delete from public.reserves where true';
   end if;
   update queue set status = 'skipped' where status in ('waiting', 'playing');
 

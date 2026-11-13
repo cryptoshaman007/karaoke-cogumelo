@@ -998,7 +998,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
 
         {playing && intro && (
           <div className="intro">
-            <Avatar src={photoOf(playing.singer_id)} size={220} />
+            <Avatar src={photoOf(playing.singer_id)} seed={playing.singer_id} size={220} />
             <span className="eyebrow">Agora é com você</span>
             <h1>{nowName}</h1>
             <p>{playing.title}</p>
@@ -1039,7 +1039,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
 
         {scoreCard && !results && !showRanking && (
           <div className="score-card">
-            <Avatar src={photoOf(scoreCard.singerId)} size={140} />
+            <Avatar src={photoOf(scoreCard.singerId)} seed={scoreCard.singerId} size={140} />
             <span className="eyebrow">Nota da galera</span>
             <h1>{fmtScore(scoreCard.score)}</h1>
             <strong>{scoreCard.name}</strong>
@@ -1057,7 +1057,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
               <h1 className="smaller">Ninguém pontuou ainda. Bora cantar!</h1>
             ) : (
               <>
-                <Avatar src={photoOf(ranking[0].singer_id)} size={170} />
+                <Avatar src={photoOf(ranking[0].singer_id)} seed={ranking[0].singer_id} size={170} />
                 <h1>{ranking[0].name}</h1>
                 <p>
                   {ranking[0].title} · nota {fmtScore(ranking[0].score)}
@@ -1067,7 +1067,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
                     {ranking.slice(1, 8).map((r, i) => (
                       <li key={r.queue_id}>
                         <span className="pos">{i + 2}</span>
-                        <Avatar src={photoOf(r.singer_id)} size={44} />
+                        <Avatar src={photoOf(r.singer_id)} seed={r.singer_id} size={44} />
                         <strong>{r.name}</strong>
                         <span className="song">{r.title}</span>
                         <span className="pts">{fmtScore(r.score)}</span>
@@ -1206,7 +1206,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         <div className="now">
           <span className="label">No palco agora</span>
           <span className="with-avatar">
-            {playing && <Avatar src={photoOf(playing.singer_id)} size={48} />}
+            {playing && <Avatar src={photoOf(playing.singer_id)} seed={playing.singer_id} size={48} />}
             <strong>{playing ? nowName : '—'}</strong>
           </span>
           {playing && <span className="song">{playing.title}</span>}
@@ -1221,7 +1221,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
               {waiting.slice(0, SHOWN).map((q, i) => (
                 <li key={q.id}>
                   <span className="pos">{i + 1}</span>
-                  <Avatar src={photoOf(q.singer_id)} size={36} />
+                  <Avatar src={photoOf(q.singer_id)} seed={q.singer_id} size={36} />
                   <div>
                     <strong>{singers[q.singer_id]?.name}</strong>
                     <span>{q.title}</span>

@@ -26,7 +26,7 @@ export default function Ranking({ rows, limit = 50, highlightFirst = false, unit
         return (
           <li key={r.queue_id} className={[first ? 'first' : '', mine?.(r) ? 'mine' : ''].join(' ').trim()}>
             <span className="pos">{first ? '🏆' : i + 1}</span>
-            {photo && <Avatar src={photo(r)} size={36} />}
+            {photo && <Avatar src={photo(r)} seed={r.singer_id ?? r.name} size={36} />}
             <div className="grow">
               <strong>{r.name}</strong>
               <span className="muted small">{r.title}</span>
