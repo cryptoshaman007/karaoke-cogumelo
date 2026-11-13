@@ -64,6 +64,12 @@ A fila fica salva no Supabase, então fechar o navegador ou desligar o PC não p
 
 Estas duas últimas precisam da migração `supabase/migrations/004_reserves_and_tv_add.sql`. Sem ela o app continua funcionando como antes (uma música por pessoa, sem o botão “+”).
 
+### Link do YouTube, selfie e figurinha da nota
+
+- **Link do YouTube:** se a busca não acha, a pessoa cola o link do vídeo no campo de busca. O servidor confere título, duração (mesmo limite da busca), se toca no telão e se não é live. Se o título não parece karaokê, o celular avisa.
+- **Selfie (opcional):** a pessoa tira uma foto no celular, ela vira um JPEG quadrado pequeno e aparece no telão (vez da pessoa, palco, fila, ranking) e nas listas do celular. Fica só em uma tabela que o servidor lê, e some: quando a pessoa ou o admin apaga, quando a noite é zerada e, de qualquer jeito, depois de 18 h. Ligar/desligar em *Selfie de quem canta* no admin, que também tem *Fotos no telão* para apagar uma foto imprópria. Precisa da migração `006_selfies.sql`; sem ela o convite nem aparece.
+- **Figurinha da nota:** depois de cantar, o celular oferece uma imagem 1080×1350 (foto, nome, música, nota da galera e a marca do bar) para compartilhar ou salvar. É desenhada no próprio celular. A nota vem do ranking da noite (migração 005); sem ela a figurinha sai sem nota.
+
 ## Estabilidade
 
 O telão foi feito para ficar a noite inteira aberto sem ninguém mexer:
@@ -78,7 +84,7 @@ O telão foi feito para ficar a noite inteira aberto sem ninguém mexer:
 
 ## Banco de dados
 
-`supabase/schema.sql` cria o banco do zero. A migração `005_night_ranking_gifs.sql` traz o ranking da noite, os GIFs e a limpeza automática; sem ela o botão *Zerar a noite* já funciona (limpeza simples), e as outras funções novas ficam desligadas. Depois rode, em ordem, os arquivos de `supabase/migrations/` (SQL Editor do Supabase). As migrações só adicionam coisas; o app funciona sem elas, mas as funções novas do admin (pausar, volume, recado, fila aberta/fechada) avisam que precisam da atualização.
+`supabase/schema.sql` cria o banco do zero. A migração `006_selfies.sql` traz as selfies (rode depois da 005). A migração `005_night_ranking_gifs.sql` traz o ranking da noite, os GIFs e a limpeza automática; sem ela o botão *Zerar a noite* já funciona (limpeza simples), e as outras funções novas ficam desligadas. Depois rode, em ordem, os arquivos de `supabase/migrations/` (SQL Editor do Supabase). As migrações só adicionam coisas; o app funciona sem elas, mas as funções novas do admin (pausar, volume, recado, fila aberta/fechada) avisam que precisam da atualização.
 
 ## Rodar localmente
 

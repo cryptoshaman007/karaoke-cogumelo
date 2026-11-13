@@ -4,10 +4,11 @@ import QRCode from 'react-qr-code';
 import AdminLogin from '@/components/AdminLogin';
 import { useAdmin } from '@/lib/useAdmin';
 import Icon from '@/components/Icon';
+import Avatar from '@/components/Avatar';
 import SongSearch from '@/components/SongSearch';
 import { post, useLive, type ApiError } from '@/lib/useLive';
 import { browserClient } from '@/lib/supabase-browser';
-import { fmtScore, isGifUrl, REACTIONS, scorePhrase, STICKERS, type QueueItem, type SearchResult, type Settings } from '@/lib/types';
+import { fmtScore, isGifUrl, photoUrl, REACTIONS, scorePhrase, STICKERS, type QueueItem, type SearchResult, type Settings } from '@/lib/types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
@@ -153,7 +154,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   // last night's leftovers are cleaned before the first song of the day is allowed to start
   const [nightReady, setNightReady] = useState(false);
   const nightReadyRef = useRef(false);
-  const [scoreCard, setScoreCard] = useState<{ queueId: number; name: string; title: string; score: number } | null>(null);
+  const [scoreCard, setScoreCard] = useState<{ queueId: number; singerId: string; name: string; title: string; score: number } | null>(null);
   const [gif, setGif] = useState<TvGif | null>(null);
   // video options (gear)
   const [videoMenu, setVideoMenu] = useState(false);
@@ -546,11 +547,11 @@ function Tv({ onLogout }: { onLogout: () => void }) {
 
   // Night ranking: when a song ends, the database grades it from the reactions it got. Show the
   // grade for a few seconds (it sits on top of the "next singer" countdown).
-  const lastSinger = useRef<{ id: number; name: string; title: string } | null>(null);
+  const lastSinger = useRef<{ id: number; singerId: string; name: string; title: string } | null>(null);
   const scoreTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const prev = lastSinger.current;
-    lastSinger.current = playing ? { id: playing.id, name: singers[playing.singer_id]?.name ?? '', title: playing.title } : null;
+    lastSinger.current = playing ? { id: playing.id, singerId: playing.singer_id, name: singers[playing.singer_id]?.name ?? '', title: playing.title } : null;
     if (!prev || prev.id === playing?.id) return;
     // a new song always starts at normal speed and with YouTube's own controls put away
     setRate(1);
@@ -563,7 +564,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         const { data } = await browserClient().from('queue').select('id, score').eq('id', prev.id).maybeSingle();
         const score = data && !Array.isArray(data) ? Number((data as { score?: number | null }).score) : NaN;
         if ((data as { score?: number | null } | null)?.score == null || !Number.isFinite(score)) return;
-        setScoreCard({ queueId: prev.id, name: prev.name, title: prev.title, score });
+        setScoreCard({ queueId: prev.id, singerId: prev.singerId, name: prev.name, title: prev.title, score });
         if (scoreTimer.current) clearTimeout(scoreTimer.current);
         scoreTimer.current = setTimeout(() => setScoreCard(null), SCORE_CARD_MS);
       } catch {}
@@ -799,6 +800,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const singUrl = origin ? `${origin}/cantar` : '';
   const adminUrl = origin ? `${origin}/admin` : '';
   const nowName = playing ? singers[playing.singer_id]?.name ?? '' : '';
+  const photoOf = (singerId: string | null | undefined) => (singerId ? photoUrl(singers[singerId], settings) : null);
   const open = settings?.queue_open ?? true;
   const showVideo = !!playing && !intro;
   const winner = results?.[0]?.score != null ? results[0] : null;
@@ -840,6 +842,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
 
         {playing && intro && (
           <div className="intro">
+            <Avatar src={photoOf(playing.singer_id)} size={220} />
             <span className="eyebrow">Agora é com você</span>
             <h1>{nowName}</h1>
             <p>{playing.title}</p>
@@ -880,6 +883,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
 
         {scoreCard && !results && !showRanking && (
           <div className="score-card">
+            <Avatar src={photoOf(scoreCard.singerId)} size={140} />
             <span className="eyebrow">Nota da galera</span>
             <h1>{fmtScore(scoreCard.score)}</h1>
             <strong>{scoreCard.name}</strong>
@@ -897,6 +901,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
               <h1 className="smaller">Ninguém pontuou ainda. Bora cantar!</h1>
             ) : (
               <>
+                <Avatar src={photoOf(ranking[0].singer_id)} size={170} />
                 <h1>{ranking[0].name}</h1>
                 <p>
                   {ranking[0].title} · nota {fmtScore(ranking[0].score)}
@@ -906,6 +911,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
                     {ranking.slice(1, 8).map((r, i) => (
                       <li key={r.queue_id}>
                         <span className="pos">{i + 2}</span>
+                        <Avatar src={photoOf(r.singer_id)} size={44} />
                         <strong>{r.name}</strong>
                         <span className="song">{r.title}</span>
                         <span className="pts">{fmtScore(r.score)}</span>
@@ -1026,7 +1032,10 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       <aside className="side">
         <div className="now">
           <span className="label">No palco agora</span>
-          <strong>{playing ? nowName : '—'}</strong>
+          <span className="with-avatar">
+            {playing && <Avatar src={photoOf(playing.singer_id)} size={48} />}
+            <strong>{playing ? nowName : '—'}</strong>
+          </span>
           {playing && <span className="song">{playing.title}</span>}
         </div>
 
@@ -1039,6 +1048,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
               {waiting.slice(0, SHOWN).map((q, i) => (
                 <li key={q.id}>
                   <span className="pos">{i + 1}</span>
+                  <Avatar src={photoOf(q.singer_id)} size={36} />
                   <div>
                     <strong>{singers[q.singer_id]?.name}</strong>
                     <span>{q.title}</span>

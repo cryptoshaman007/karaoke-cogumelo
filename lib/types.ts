@@ -6,6 +6,8 @@ export interface Singer {
   name: string;
   status: SingerStatus;
   created_at: string;
+  /** when this person took the selfie shown on the projector (null/missing = no photo) */
+  photo_at?: string | null;
 }
 
 export interface QueueItem {
@@ -57,6 +59,8 @@ export interface Settings {
   tv_add_enabled: boolean;
   /** quantas músicas cada pessoa pode ter ao mesmo tempo (1 na fila + reservas) */
   songs_per_person: number;
+  /** selfie opcional de quem canta, no telão, na fila e no ranking */
+  photos_enabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -80,6 +84,7 @@ export const DEFAULT_SETTINGS: Settings = {
   night_reset_hour: -1,
   tv_add_enabled: false,
   songs_per_person: 1,
+  photos_enabled: false,
 };
 
 /** A song a singer left in reserve: it joins the end of the queue after their current one. */
@@ -179,4 +184,10 @@ export function scorePhrase(score: number): string {
   if (score >= 6.5) return 'Mandou bem!';
   if (score >= 5.5) return 'Valeu a coragem!';
   return 'A plateia tava tímida…';
+}
+
+/** Address of a person's selfie, or null when there is none (or photos are off). */
+export function photoUrl(singer: Pick<Singer, 'id' | 'photo_at'> | null | undefined, settings: Pick<Settings, 'photos_enabled'> | null | undefined): string | null {
+  if (!singer?.photo_at || !settings?.photos_enabled) return null;
+  return `/api/photo/${singer.id}?v=${encodeURIComponent(singer.photo_at)}`;
 }

@@ -30,6 +30,7 @@ export async function POST(req: NextRequest) {
   }
   if (body.rankingOnTv != null) patch.ranking_on_tv = Boolean(body.rankingOnTv);
   if (body.gifsEnabled != null) patch.gifs_enabled = Boolean(body.gifsEnabled);
+  if (body.photosEnabled != null) patch.photos_enabled = Boolean(body.photosEnabled);
   if (body.nightResetHour !== undefined) {
     // null or a negative number turns the automatic clean-up off
     const h = body.nightResetHour === null ? -1 : Math.round(Number(body.nightResetHour));

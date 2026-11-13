@@ -20,7 +20,7 @@ async function yt(): Promise<Yt> {
   return ytPromise;
 }
 
-const KARAOKE_RE = /karaok[eê]|videok[eê]|sing ?along|vers[aã]o karaok/i;
+export const KARAOKE_RE = /karaok[eê]|videok[eê]|sing ?along|vers[aã]o karaok/i;
 
 const cache = new Map<string, { at: number; results: SearchResult[] }>();
 const CACHE_MS = 30 * 60 * 1000;
@@ -86,4 +86,51 @@ export async function searchKaraoke(query: string, maxDurationSec: number): Prom
     if (cache.size > 500) cache.delete(cache.keys().next().value!);
   }
   return results.filter((r) => r.durationSec <= maxDurationSec);
+}
+
+export interface LinkedVideo extends SearchResult {
+  /** false when YouTube says the owner does not allow the video outside youtube.com */
+  embeddable: boolean;
+  live: boolean;
+}
+
+const linkCache = new Map<string, { at: number; video: LinkedVideo | null }>();
+
+/** Title and length of one video, for a link the customer pasted. Null when the video does not exist. */
+export async function videoById(videoId: string): Promise<LinkedVideo | null> {
+  const hit = linkCache.get(videoId);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.video;
+  const once = async () => {
+    const client = await withTimeout(yt(), 8000);
+    try {
+      return await withTimeout(client.getBasicInfo(videoId), 7000);
+    } catch (e) {
+      ytPromise = null;
+      throw e;
+    }
+  };
+  let info;
+  try {
+    info = await once();
+  } catch (first) {
+    console.error('video info failed', first);
+    info = await once();
+  }
+  const b = info.basic_info;
+  const status = info.playability_status?.status;
+  let video: LinkedVideo | null = null;
+  if (b?.title && b.duration && status !== 'ERROR') {
+    video = {
+      videoId,
+      title: b.title,
+      thumbnail: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+      durationSec: b.duration,
+      channel: b.author ?? b.channel?.name ?? '',
+      embeddable: info.playability_status?.embeddable !== false,
+      live: !!(b.is_live || b.is_upcoming),
+    };
+  }
+  linkCache.set(videoId, { at: Date.now(), video });
+  if (linkCache.size > 500) linkCache.delete(linkCache.keys().next().value!);
+  return video;
 }
