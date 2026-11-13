@@ -321,7 +321,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
           <strong>Karaokê Cogumelo</strong>
         </div>
         <span className="chip with-avatar">
-          <Avatar src={myPhoto} size={22} />
+          <Avatar src={myPhoto} seed={me.id} size={22} />
           {self.name}
         </span>
       </header>
@@ -496,7 +496,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
             {playing && (
               <li className={playing.singer_id === me.id ? 'me' : ''}>
                 <span className="pos live">♪</span>
-                <Avatar src={photoOf(playing.singer_id)} size={34} />
+                <Avatar src={photoOf(playing.singer_id)} seed={playing.singer_id} size={34} />
                 <div className="grow">
                   <strong>{singers[playing.singer_id]?.name ?? '…'}</strong>
                   <span className="muted small">{playing.title}</span>
@@ -506,7 +506,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
             {line.slice(0, 15).map((q, i) => (
               <li key={q.id} className={q.singer_id === me.id ? 'me' : ''}>
                 <span className="pos">{i + 1}</span>
-                <Avatar src={photoOf(q.singer_id)} size={34} />
+                <Avatar src={photoOf(q.singer_id)} seed={q.singer_id} size={34} />
                 <div className="grow">
                   <strong>{singers[q.singer_id]?.name ?? '…'}</strong>
                   <span className="muted small">{q.title}</span>

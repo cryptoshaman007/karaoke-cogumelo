@@ -1135,7 +1135,9 @@ await test('selfie: aparece no telão (vez da pessoa, palco e fila) e banco sem 
   await shot(page, 'tv-selfie-vez');
   expect((await until(page, async () => (await yt(page)).state === 1, 20000)) >= 0, 'a música não tocou');
   expect((await page.locator('.side .now .avatar').count()) === 1, 'sem foto em "No palco agora"');
-  expect((await page.locator('.side .list .avatar').count()) === 0, 'Bia não tem foto e apareceu uma');
+  // Bia has no selfie: a drawing instead of a photo, never an empty circle
+  expect((await page.locator('.side .list img.avatar').count()) === 0, 'Bia não tem foto e apareceu uma');
+  expect((await page.locator('.side .list .avatar.fun').count()) === 1, 'Bia sem foto ficou sem desenho');
   await ctx.close();
 
   // same night, database without update 006: the select with photo_at fails, the screen keeps working

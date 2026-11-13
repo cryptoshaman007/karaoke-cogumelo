@@ -174,7 +174,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
           <ul className="rows">
             {pending.map((s) => (
               <li key={s.id}>
-                <Avatar src={photoUrl(s, settings)} size={40} />
+                <Avatar src={photoUrl(s, settings)} seed={s.id} size={40} />
                 <div className="grow">
                   <strong>
                     {s.name} {repeated(s.name) && <em className="tag warn-tag">nome repetido</em>}
