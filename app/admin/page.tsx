@@ -350,6 +350,32 @@ function Panel({ onLogout }: { onLogout: () => void }) {
             <span className="muted small">Palmas, coração, fogo e choro enviados pelo celular.</span>
           </span>
         </label>
+        <label className="switch">
+          <input type="checkbox" checked={settings.tv_add_enabled} onChange={(e) => setting({ tvAddEnabled: e.target.checked })} />
+          <span>
+            <strong>Adicionar pedido pelo telão</strong>
+            <span className="muted small">Mostra um botão “+” discreto no computador, para quem está sem celular.</span>
+          </span>
+        </label>
+        <div className="field">
+          <span>Músicas por pessoa</span>
+          <div className="row">
+            {[1, 2, 3].map((n) => (
+              <button
+                key={n}
+                className={settings.songs_per_person === n ? 'btn primary' : 'btn'}
+                aria-pressed={settings.songs_per_person === n}
+                disabled={busy}
+                onClick={() => setting({ songsPerPerson: n })}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+          <span className="muted small">
+            Ninguém canta duas seguidas: só uma fica na fila. As outras ficam de reserva e entram no fim da fila quando a pessoa termina de cantar.
+          </span>
+        </div>
         <div className="field">
           <span>Duração máxima da música (minutos)</span>
           <div className="row">

@@ -24,6 +24,12 @@ export async function POST(req: NextRequest) {
     patch.tv_message = String(body.tvMessage).replace(/\s+/g, ' ').trim().slice(0, 140);
   }
   if (body.reactionsEnabled != null) patch.reactions_enabled = Boolean(body.reactionsEnabled);
+  if (body.tvAddEnabled != null) patch.tv_add_enabled = Boolean(body.tvAddEnabled);
+  if (body.songsPerPerson != null) {
+    const n = Math.round(Number(body.songsPerPerson));
+    if (!Number.isFinite(n) || n < 1 || n > 3) return fail('Entre 1 e 3 músicas por pessoa');
+    patch.songs_per_person = n;
+  }
   if (body.paused != null) patch.paused = Boolean(body.paused);
   if (body.volume != null) {
     const v = Math.round(Number(body.volume));

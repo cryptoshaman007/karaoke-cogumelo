@@ -52,6 +52,14 @@ A fila fica salva no Supabase, então fechar o navegador ou desligar o PC não p
 - Votos e reações passam por funções do banco (`cast_vote`, `send_reaction`) chamadas só pelo servidor: uma ida ao banco por toque.
 - Limite de tentativas no login do admin (8 erros em 15 min), nas entradas e nas buscas, guardado na tabela `rate_events`.
 
+### Botões do telão, pedido pelo computador e músicas por pessoa
+
+- **Botões do telão:** no canto de baixo do vídeo ficam três botões pequenos e quase transparentes: pausar, voltar ao início da música e pular.
+- **Adicionar pedido pelo telão:** um “+” discreto ao lado da engrenagem abre uma janela para digitar o nome e escolher a música de quem está sem celular. Liga e desliga em *Configurações* no admin.
+- **Músicas por pessoa (1, 2 ou 3):** só uma música de cada pessoa fica na fila. As outras ficam de reserva e entram no fim da fila quando a pessoa termina de cantar, então ninguém canta duas seguidas.
+
+Estas duas últimas precisam da migração `supabase/migrations/004_reserves_and_tv_add.sql`. Sem ela o app continua funcionando como antes (uma música por pessoa, sem o botão “+”).
+
 ## Estabilidade
 
 O telão foi feito para ficar a noite inteira aberto sem ninguém mexer:

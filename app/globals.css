@@ -146,7 +146,11 @@ input[type=search]::-webkit-search-cancel-button { display: none; }
 .sing .qr svg { width: clamp(96px, 8.5vw, 170px); height: clamp(96px, 8.5vw, 170px); }
 .gear { position: absolute; right: 4px; bottom: 4px; background: none; border: 0; color: var(--muted); padding: 6px; cursor: pointer; opacity: .25; line-height: 0; }
 .gear:hover, .gear:focus-visible { opacity: 1; }
-.pending-dot { position: absolute; right: 30px; bottom: 9px; background: var(--warn); color: #1a1300; border-radius: 99px; font-size: .7rem; font-weight: 700; padding: 0 .4rem; }
+.tv-add { position: absolute; right: 28px; bottom: 4px; background: none; border: 0; color: var(--muted); padding: 6px; cursor: pointer; opacity: .35; line-height: 0; }
+.tv-add:hover, .tv-add:focus-visible { opacity: 1; }
+.modal .card.add-card { width: min(560px, 100%); max-width: 560px; max-height: 88vh; overflow: auto; display: flex; flex-direction: column; align-items: stretch; gap: .9rem; text-align: left; }
+.modal .card.add-card .searchbar input { flex: 1; min-width: 0; }
+.pending-dot { position: absolute; right: 56px; bottom: 9px; background: var(--warn); color: #1a1300; border-radius: 99px; font-size: .7rem; font-weight: 700; padding: 0 .4rem; }
 .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, .7); backdrop-filter: blur(4px); display: grid; place-items: center; z-index: 10; padding: 16px; }
 .modal .card { align-items: center; text-align: center; max-width: 440px; padding: 1.6rem; }
 .modal .row { justify-content: center; }

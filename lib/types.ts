@@ -40,6 +40,10 @@ export interface Settings {
   /** campeonato encerrado cujo resultado está no telão */
   results_contest_id: number | null;
   reactions_enabled: boolean;
+  /** botão "adicionar pedido" no telão, para quem está sem celular */
+  tv_add_enabled: boolean;
+  /** quantas músicas cada pessoa pode ter ao mesmo tempo (1 na fila + reservas) */
+  songs_per_person: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -56,7 +60,18 @@ export const DEFAULT_SETTINGS: Settings = {
   results_contest_id: null,
   // off until the database says otherwise, so the buttons stay hidden if the columns are missing
   reactions_enabled: false,
+  tv_add_enabled: false,
+  songs_per_person: 1,
 };
+
+/** A song a singer left in reserve: it joins the end of the queue after their current one. */
+export interface Reserve {
+  id: number;
+  video_id: string;
+  title: string;
+  thumbnail: string | null;
+  duration_sec: number;
+}
 
 /** Fills in defaults, so the app keeps working even if the database is missing newer columns. */
 export function normalizeSettings(raw: Partial<Settings> | null | undefined): Settings {

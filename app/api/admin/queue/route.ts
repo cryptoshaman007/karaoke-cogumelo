@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { advanceQueue, db, getSettings } from '@/lib/supabase-server';
+import { advanceQueue, db, getSettings, promoteReserves } from '@/lib/supabase-server';
 import { hashToken, isAdmin, newSingerToken } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
 import { cleanName, parseSong } from '@/lib/song';
@@ -24,10 +24,13 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(id)) return fail('Música inválida');
     const { error } = await sb.from('queue').update({ status: 'skipped' }).eq('id', id).eq('status', 'waiting');
     if (error) return fail(error.message, 500);
+    await promoteReserves();
     return json({ ok: true });
   }
 
   if (action === 'clear') {
+    // "clear" means clear: reserve songs go too (ignored if that table does not exist yet)
+    await sb.from('reserves').delete().gt('id', 0);
     const { error } = await sb.from('queue').update({ status: 'skipped' }).eq('status', 'waiting');
     if (error) return fail(error.message, 500);
     return json({ ok: true });
@@ -81,6 +84,8 @@ export async function POST(req: NextRequest) {
     } catch {
       return fail('Tente de novo em instantes', 503);
     }
+    // from the projector's own button: only while the admin leaves it switched on
+    if (body.from === 'tv' && !settings.tv_add_enabled) return fail('Adicionar pelo telão está desligado.', 403);
     const song = parseSong((body.song ?? {}) as Record<string, unknown>, settings);
     if (typeof song === 'string') return fail(song);
     if (!(await canEmbed(song.video_id))) return fail(NOT_EMBEDDABLE, 422);
