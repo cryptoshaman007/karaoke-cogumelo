@@ -5,7 +5,7 @@ import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
 import Avatar from '@/components/Avatar';
 import { browserClient } from '@/lib/supabase-browser';
-import { del, get, post, useLive } from '@/lib/useLive';
+import { del, get, post, put, useLive } from '@/lib/useLive';
 import { selfieJpeg } from '@/lib/selfie';
 import { cleanSongTitle, drawSticker, type StickerData } from '@/lib/sticker';
 import { timeoutSignal } from '@/lib/timeout';
@@ -228,8 +228,22 @@ function Room({ me, token }: { me: Singer; token: string }) {
   }
   const canReserve = !!entry && open && self.status !== 'blocked' && 1 + reserves.length < maxSongs;
 
+  // "Trocar a música": the new one takes the place of the old one, same spot in the line
+  const [swapping, setSwapping] = useState(false);
+  const swap = useCallback(
+    async (song: SearchResult) => {
+      await put('/api/queue', song, { 'x-singer-token': token });
+      setSwapping(false);
+      await refresh();
+    },
+    [token, refresh],
+  );
+  useEffect(() => {
+    if (entry?.status !== 'waiting') setSwapping(false);
+  }, [entry?.status]);
+
   async function removeMine() {
-    if (!confirm('Tirar sua música da fila? Você pode escolher outra depois.')) return;
+    if (!confirm('Tirar sua música da fila? Você perde o lugar na fila.')) return;
     setErr('');
     try {
       await del('/api/queue', { 'x-singer-token': token });
@@ -394,10 +408,24 @@ function Room({ me, token }: { me: Singer; token: string }) {
               )}
             </div>
           ) : null}
-          {entry.status === 'waiting' && (
-            <button className="btn ghost" onClick={removeMine}>
-              Trocar ou tirar a música
-            </button>
+          {entry.status === 'waiting' && !swapping && (
+            <div className="btns">
+              <button className="btn ghost" onClick={() => setSwapping(true)}>
+                Trocar a música
+              </button>
+              <button className="btn ghost" onClick={removeMine}>
+                Tirar da fila
+              </button>
+            </div>
+          )}
+          {entry.status === 'waiting' && swapping && (
+            <>
+              <p className="muted small">Escolhe a nova música. Você continua no mesmo lugar da fila.</p>
+              <SongSearch authHeaders={{ 'x-singer-token': token }} maxDurationSec={maxDurationSec} pickLabel="Trocar" onPick={swap} />
+              <button className="btn ghost self-start" onClick={() => setSwapping(false)}>
+                Deixa como tá
+              </button>
+            </>
           )}
         </section>
       )}

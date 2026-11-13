@@ -1,10 +1,11 @@
 import { NextRequest } from 'next/server';
 import { db } from '@/lib/supabase-server';
-import { isAdmin } from '@/lib/auth';
+import { requireAdmin } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
 
 export async function POST(req: NextRequest) {
-  if (!(await isAdmin())) return fail('Faça login no admin', 401);
+  const denied = await requireAdmin();
+  if (denied) return denied;
   const body = await readBody(req);
   const patch: Record<string, unknown> = {};
 

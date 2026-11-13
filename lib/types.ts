@@ -112,6 +112,8 @@ export interface SearchResult {
   thumbnail: string;
   durationSec: number;
   channel: string;
+  /** server signature of id + title + length; the queue only takes signed songs */
+  sig?: string;
 }
 
 export interface PopularSong extends SearchResult {

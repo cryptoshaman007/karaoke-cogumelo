@@ -35,13 +35,15 @@ A fila fica salva no Supabase, então fechar o navegador ou desligar o PC não p
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `sb_publishable_c1PgwaJUktSnKX8wpLpyrA_8hobWNFE` |
    | `SUPABASE_SECRET_KEY` | a chave secreta do passo 1 |
    | `ADMIN_PASSWORD` | uma senha forte só sua |
+   | `CRON_SECRET` | opcional: qualquer texto longo; só a Vercel consegue chamar o “mantém acordado” |
+   | `YOUTUBE_API_KEY` | opcional: chave gratuita da YouTube Data API, deixa o “colar link” mais confiável |
 
    Clique em *Deploy*. Em *Settings → Functions*, escolha a região **São Paulo (gru1)**.
 
 ## No bar
 
 1. No PC com Windows, abra o Chrome no endereço da Vercel (ex.: `https://karaoke-cogumelo.vercel.app`).
-2. Digite a senha do admin e clique em **Iniciar karaokê** (o navegador exige um clique para liberar o som).
+2. Digite a senha do admin e clique em **Clique pra começar o karaokê** (o navegador exige um clique para liberar o som).
 3. Aperte **F11** para tela cheia.
 
 ## Detalhes técnicos
@@ -79,12 +81,16 @@ O telão foi feito para ficar a noite inteira aberto sem ninguém mexer:
 - Nenhum pedido fica pendurado para sempre: todos têm tempo limite.
 - Se o tempo real do Supabase cair, as telas passam a consultar o banco a cada 5 segundos e refazem a conexão.
 - Se a tela der erro, ela se reconstrói sozinha em vez de ficar em uma página de erro.
+- **Um telão só no comando.** Se outro aparelho logado abrir a tela do projetor, ele vira um *segundo telão*: mostra só a fila, sem vídeo, e não mexe na fila. O botão *Assumir o telão aqui* passa o comando para ele (use se o PC do projetor desligou). Se o telão no comando sumir por 30 segundos, o outro pode assumir.
+- **Som que volta sozinho.** Se o Chrome segurou o som depois de reabrir (ou um vídeo demorou demais para começar), o telão toca sem som e pede um clique, mas a cada música nova tenta ligar o som de novo sozinho.
+- **Ranking e resultado não seguram a fila para sempre:** com gente esperando, saem do telão sozinhos depois de 3 minutos.
+- **Banco acordado.** No plano grátis o Supabase pausa o projeto depois de uma semana sem uso. Uma tarefa diária da Vercel (`vercel.json`, rota `/api/keepalive`, 12h de Brasília) faz uma leitura e evita isso, mesmo com o bar fechado.
 
 `tests/stability.mjs` simula tudo isso (banco, servidor e YouTube falsos, relógio acelerado) e roda em cerca de dois minutos. As instruções estão no começo do arquivo.
 
 ## Banco de dados
 
-`supabase/schema.sql` cria o banco do zero. A migração `006_selfies.sql` traz as selfies (rode depois da 005). A migração `005_night_ranking_gifs.sql` traz o ranking da noite, os GIFs e a limpeza automática; sem ela o botão *Zerar a noite* já funciona (limpeza simples), e as outras funções novas ficam desligadas. Depois rode, em ordem, os arquivos de `supabase/migrations/` (SQL Editor do Supabase). As migrações só adicionam coisas; o app funciona sem elas, mas as funções novas do admin (pausar, volume, recado, fila aberta/fechada) avisam que precisam da atualização.
+`supabase/schema.sql` cria o banco do zero. A migração `007_review_fixes.sql` traz o limite de tentativas num passo só, a sessão do admin que dá para encerrar (*Sair* e *Sair de todos os aparelhos*), a trava de um telão só e a limpeza da noite mais cuidadosa. A `008_public_read_limits.sql` faz a chave pública ver só a noite atual (nomes, fila e ranking das últimas 24 h); o arquivo traz o comando para desfazer. Sem elas o app funciona como antes. A migração `006_selfies.sql` traz as selfies (rode depois da 005). A migração `005_night_ranking_gifs.sql` traz o ranking da noite, os GIFs e a limpeza automática; sem ela o botão *Zerar a noite* já funciona (limpeza simples), e as outras funções novas ficam desligadas. Depois rode, em ordem, os arquivos de `supabase/migrations/` (SQL Editor do Supabase). As migrações só adicionam coisas; o app funciona sem elas, mas as funções novas do admin (pausar, volume, recado, fila aberta/fechada) avisam que precisam da atualização.
 
 ## Rodar localmente
 

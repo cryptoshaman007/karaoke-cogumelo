@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { db, getSettings, isMissingSchema, NEEDS_MIGRATION } from '@/lib/supabase-server';
 import { singerFromRequest } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
-import { recordHit, tooMany } from '@/lib/rate';
+import { allow } from '@/lib/rate';
 import { cleanJpeg, dropOldPhotos, removePhoto } from '@/lib/photos';
 
 export const dynamic = 'force-dynamic';
@@ -31,8 +31,7 @@ export async function POST(req: NextRequest) {
   const jpeg = cleanJpeg((await readBody(req)).jpeg);
   if (!jpeg) return fail('Não deu pra usar essa foto. Tenta tirar de novo.');
   const key = `photo:${singer.id}`;
-  if (await tooMany(key, 8, 10 * 60)) return fail('Muita foto seguida! Espera uns minutinhos.', 429);
-  void recordHit(key);
+  if (!(await allow([{ key, max: 8, windowSec: 10 * 60 }], true))) return fail('Muita foto seguida! Espera uns minutinhos.', 429);
 
   const now = new Date().toISOString();
   const up = await db().from('singer_photos').upsert({ singer_id: singer.id, jpeg, created_at: now });

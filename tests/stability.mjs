@@ -57,6 +57,25 @@ const FAKE_YT = `
       p.stallAt = null;
       if (cue) return set(S.CUED);
       if (mode === 'dead') return set(S.UNSTARTED);
+      // slow start (bad internet or an ad): nothing for 15 s, then it plays
+      if (mode === 'late') {
+        set(S.UNSTARTED);
+        return void setTimeout(() => {
+          if (p.destroyed || p.videoId !== videoId) return;
+          set(S.BUFFERING);
+          setTimeout(() => !p.destroyed && p.videoId === videoId && set(S.PLAYING), 300);
+        }, 15000);
+      }
+      // the player still says "ended" (the previous video) for a moment after loading
+      if (mode === 'staleend') {
+        p.state = S.ENDED;
+        fire('onStateChange', S.ENDED);
+        return setTimeout(() => {
+          if (p.destroyed || p.videoId !== videoId) return;
+          set(S.BUFFERING);
+          setTimeout(() => !p.destroyed && p.videoId === videoId && set(S.PLAYING), 300);
+        }, 3500);
+      }
       if (mode === 'soundblocked' && !p.muted) return set(S.UNSTARTED); // Chrome holding the sound until a click
       if (typeof mode === 'string' && mode.startsWith('error')) { set(S.UNSTARTED); return fire('onError', Number(mode.slice(5))); }
       if (typeof mode === 'string' && mode.startsWith('stall')) p.stallAt = Number(mode.slice(5));
@@ -70,7 +89,11 @@ const FAKE_YT = `
       else if (p.state === S.UNSTARTED && p.mode === 'soundblocked' && p.muted) set(S.PLAYING);
     };
     p.mute = () => { p.muted = true; };
-    p.unMute = () => { p.muted = false; };
+    // Chrome pauses a video that tries to get its sound back without a click
+    p.unMute = () => {
+      p.muted = false;
+      if (p.mode === 'soundblocked' && !navigator.userActivation?.hasBeenActive && p.state === S.PLAYING) set(S.PAUSED);
+    };
     p.pauseVideo = () => { if (p.state === S.PLAYING || p.state === S.BUFFERING) set(S.PAUSED); };
     p.stopVideo = () => { p.state = S.UNSTARTED; };
     p.seekTo = (t) => { p.time = t; };
@@ -153,6 +176,17 @@ function makeBackend() {
     insert(table, record) {
       for (const s of b.sockets) s.push(table, 'INSERT', record);
     },
+    tvOwner: null,
+    tvSeen: 0,
+    claimTv(id, force) {
+      const now = Date.now();
+      if (force || !b.tvOwner || b.tvOwner === id || now - b.tvSeen > 30000) {
+        b.tvOwner = id;
+        b.tvSeen = now;
+        return true;
+      }
+      return false;
+    },
     nightMode: 'fresh', // 'fresh' | 'reset' | 'hang'
     nightCalls: 0,
     dropSockets() {
@@ -210,8 +244,10 @@ async function wire(page, b, { admin = true } = {}) {
     b.apiCalls.push({ path, method: req.method(), body });
     const json = (data, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
     if (path === '/api/admin/login') return json({ admin });
+    if (path === '/api/tv') return json({ owner: b.claimTv(body.id, body.force === true) });
     if (path === '/api/player') {
       b.playerCalls.push({ ...body, mode: b.playerMode });
+      if (body.tv && !b.claimTv(body.tv, false)) return json({ error: 'Outro telão tá no comando.', notOwner: true }, 409);
       if (b.playerMode === 'fail') return route.abort('internetdisconnected');
       if (b.playerMode === 'hang') return; // never answers
       if (b.playerMode === '401') return json({ error: 'Faça login no admin' }, 401);
@@ -270,6 +306,19 @@ async function wire(page, b, { admin = true } = {}) {
     if (path === '/api/queue' && req.method() === 'DELETE') {
       const rid = new URL(req.url()).searchParams.get('reserve');
       if (rid) b.reserves = b.reserves.filter((r) => String(r.id) !== rid);
+      return json({ ok: true });
+    }
+    if (path === '/api/queue' && req.method() === 'PUT') {
+      const mine = b.queue.find((q) => q.singer_id === b.me.id && q.status === 'waiting');
+      if (!mine) return json({ error: 'Sua música já começou ou saiu da fila.' }, 409);
+      Object.assign(mine, { video_id: body.videoId, title: body.title, duration_sec: body.durationSec });
+      b.swaps = (b.swaps ?? 0) + 1;
+      b.notify('queue');
+      return json({ ok: true });
+    }
+    if (path === '/api/contest' || path === '/api/admin/contest') {
+      if (body.action === 'hide') b.settings.results_contest_id = null;
+      b.notify('settings');
       return json({ ok: true });
     }
     if (path === '/api/queue' && req.method() === 'POST') {
@@ -389,6 +438,9 @@ async function shot(page, name) {
   await new Promise((r) => setTimeout(r, 700)); // real time, so CSS animations finish
   await page.screenshot({ path: `${process.env.SHOTS}/${name}.png` });
 }
+
+/** Real time (not browser time): the fake server's own delays run on the real clock. */
+const settle = (ms = 800) => new Promise((r) => setTimeout(r, ms));
 
 function expect(cond, msg) {
   if (!cond) throw new Error(msg);
@@ -644,7 +696,7 @@ await test('navegador reabre e segura o som sem clique: toca sem som e um clique
   const p = await page.evaluate(() => { const pl = window.__yt.players.at(-1); return { muted: pl.muted, time: pl.time }; });
   expect(p.muted, `não tocou sem som: ${JSON.stringify(await page.evaluate(() => ({ loads: window.__yt.loads, act: navigator.userActivation?.hasBeenActive })))}`);
   expect((await page.locator('.sound-overlay').count()) === 1, 'não pediu clique para ligar o som');
-  await run(page, 300000); // five minutes muted: the watchdog must not skip it
+  await run(page, 150000); // two and a half minutes muted: the watchdog must not skip it
   expect(b.queue[0].status !== 'skipped', `pulou a música tocando sem som: ${statuses(b)}`);
   await page.locator('.sound-overlay').click();
   await run(page, 500);
@@ -1127,6 +1179,7 @@ await test('celular: link do YouTube colado vira o resultado, com aviso quando n
   expect((await page.getByText('não parece versão karaokê').count()) === 1, 'sem aviso de que não parece karaokê');
   await shot(page, 'celular-link');
   await page.getByRole('button', { name: 'Cantar' }).click();
+  await settle();
   expect((await until(page, async () => b.queue.some((q) => q.video_id === 'linkAAAAAA1'), 5000, 100)) >= 0, 'a música do link não entrou na fila');
   expect(errors.length === 0, errors.join('; '));
   await ctx.close();
@@ -1161,6 +1214,117 @@ await test('celular: depois de cantar, a figurinha com a nota fica pronta pra co
     (await import('fs')).writeFileSync(`${process.env.SHOTS}/figurinha.png`, Buffer.from(png, 'base64'));
   }
   expect((await page.getByRole('link', { name: 'Salvar imagem' }).count()) === 1, 'sem botão de salvar');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+// ---------------------------------------------------------------- correções da revisão (13/11)
+
+await test('dois telões abertos: o segundo vira espelho, não corta a música e pode assumir', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'vidAAAAAAA1', { duration: 200 });
+  b.add('Bia', 'vidBBBBBBB2', { duration: 200 });
+  const one = await openTv(b);
+  await one.page.evaluate(() => ((window.__yt.dur.vidAAAAAAA1 = 200), (window.__yt.dur.vidBBBBBBB2 = 200)));
+  await until(one.page, async () => (await yt(one.page)).state === 1, 20000);
+  // a phone logged in as admin opens the projector address too
+  const two = await openTv(b, { click: false });
+  await run(two.page, 3000);
+  expect((await two.page.locator('.mirror-overlay').count()) === 1, 'o segundo telão não virou espelho');
+  expect((await yt(two.page)).players === 0, 'o segundo telão criou um player');
+  await run(two.page, 60000);
+  await run(one.page, 3000);
+  expect(b.queue[0].status === 'playing', `a música do primeiro telão foi cortada: ${statuses(b)}`);
+  expect(!b.playerCalls.some((c) => c.tv && c.tv !== b.tvOwner), 'o espelho mexeu na fila');
+  // the projector PC died: the phone takes over
+  await two.page.getByRole('button', { name: 'Assumir o telão aqui' }).click();
+  await run(two.page, 2000);
+  expect((await two.page.locator('.mirror-overlay').count()) === 0, 'não assumiu');
+  expect((await until(two.page, async () => (await yt(two.page)).state === 1, 20000)) >= 0, 'o telão novo não tocou');
+  await run(one.page, 10000); // next heartbeat of the old one
+  expect((await one.page.locator('.mirror-overlay').count()) === 1, 'o telão antigo não virou espelho');
+  expect(one.errors.length === 0 && two.errors.length === 0, one.errors.concat(two.errors).join('; '));
+  await one.ctx.close();
+  await two.ctx.close();
+});
+
+await test('reabriu sem clique e o vídeo demorou (falso alarme): o som volta sozinho', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'vidAAAAAAA1', { duration: 200 });
+  const { page, ctx } = await openTv(b);
+  await page.evaluate(() => (window.__yt.dur.vidAAAAAAA1 = 200));
+  await until(page, async () => (await yt(page)).time > 20, 60000);
+  await page.addInitScript(() => {
+    const y = (window.__yt = window.__yt || { players: [], loads: [], behavior: {}, dur: {}, noReady: 0 });
+    y.behavior.vidAAAAAAA1 = 'late'; // slow internet: 15 s to start, the sound is NOT blocked
+    y.dur.vidAAAAAAA1 = 200;
+    Object.defineProperty(navigator, 'userActivation', { get: () => ({ hasBeenActive: false, isActive: false }) });
+  });
+  await page.reload();
+  const t = await until(page, async () => (await yt(page)).state === 1, 40000);
+  expect(t >= 0, 'não tocou');
+  await run(page, 6000);
+  const muted = await page.evaluate(() => window.__yt.players.at(-1).muted);
+  expect(!muted, 'ficou sem som depois do falso alarme');
+  expect((await page.locator('.sound-overlay').count()) === 0, 'o aviso de som continuou na tela');
+  await ctx.close();
+});
+
+await test('contagem em 0: o "terminou" da música anterior não encerra a próxima', async () => {
+  const b = makeBackend();
+  b.settings.intermission_sec = 0;
+  b.add('Ana', 'vidAAAAAAA1', { duration: 8 });
+  b.add('Bia', 'staleBBBBB2', { duration: 60 });
+  const { page, ctx } = await openTv(b);
+  await page.evaluate(() => ((window.__yt.dur.vidAAAAAAA1 = 8), (window.__yt.dur.staleBBBBB2 = 60), (window.__yt.behavior.staleBBBBB2 = 'staleend')));
+  await until(page, async () => b.queue[1].status === 'playing', 30000);
+  await run(page, 15000);
+  expect(b.queue[1].status === 'playing', `a música da Bia foi encerrada antes de tocar: ${statuses(b)}`);
+  expect((await yt(page)).state === 1, 'a música da Bia não tocou');
+  await ctx.close();
+});
+
+await test('ranking esquecido no telão com gente na fila: sai sozinho em 3 minutos', async () => {
+  const b = makeBackend();
+  b.settings.ranking_enabled = true;
+  b.add('Ana', 'vidAAAAAAA1', { duration: 30 });
+  const { page, ctx } = await openTv(b);
+  await page.evaluate(() => (window.__yt.dur.vidAAAAAAA1 = 30));
+  await until(page, async () => (await yt(page)).state === 1, 20000);
+  b.settings.ranking_on_tv = true;
+  b.add('Bia', 'vidBBBBBBB2', { duration: 30 });
+  b.notify('settings');
+  await run(page, 2000);
+  expect(await page.locator('.results-screen').isVisible(), 'o ranking não apareceu');
+  await run(page, 175000);
+  expect(b.settings.ranking_on_tv === true, 'fechou cedo demais');
+  await run(page, 8000);
+  expect(b.settings.ranking_on_tv === false, 'o ranking não saiu sozinho');
+  await ctx.close();
+});
+
+await test('celular: trocar a música mantém o lugar na fila', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'vidAAAAAAA1', { duration: 200 });
+  const { page, ctx, errors } = await openPhone(b);
+  await page.getByRole('searchbox').fill('evidencias');
+  await page.getByRole('button', { name: 'Buscar' }).click();
+  await run(page, 1000);
+  await page.getByRole('button', { name: 'Cantar' }).click();
+  await settle();
+  await run(page, 2000);
+  b.add('Caio', 'vidCCCCCCC3', { duration: 200 });
+  const mine = b.queue.find((q) => q.singer_id === b.me.id);
+  const before = mine.position;
+  await page.getByRole('button', { name: 'Trocar a música' }).click();
+  await page.locator('.mysong').getByRole('searchbox').fill('outra');
+  await page.locator('.mysong').getByRole('button', { name: 'Buscar' }).click();
+  await run(page, 1000);
+  await page.getByRole('button', { name: 'Trocar', exact: true }).click();
+  await run(page, 2000);
+  expect(b.swaps === 1, 'não trocou');
+  expect(b.queue.filter((q) => q.singer_id === b.me.id).length === 1 && mine.position === before, 'perdeu o lugar na fila');
+  expect((await page.getByRole('button', { name: 'Trocar a música' }).count()) === 1, 'o celular não voltou ao normal');
   expect(errors.length === 0, errors.join('; '));
   await ctx.close();
 });

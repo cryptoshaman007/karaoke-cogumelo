@@ -5,6 +5,14 @@ import { fail, json, readBody } from '@/lib/http';
 import { parseSong } from '@/lib/song';
 import { canEmbed, NOT_EMBEDDABLE } from '@/lib/embed';
 import { autoResetNight, nightResetDue } from '@/lib/night';
+import { songSigOk } from '@/lib/songsig';
+
+const BAD_SIG = 'Essa música veio de um jeito estranho. Busca ela de novo, por favor!';
+
+/** The song must be one this server handed out (search, link, "mais cantadas"), title and length unchanged. */
+function signed(body: Record<string, unknown>) {
+  return songSigOk(String(body.videoId ?? ''), String(body.title ?? ''), Number(body.durationSec), body.sig);
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -49,8 +57,10 @@ export async function POST(req: NextRequest) {
     } catch {}
   }
   if (!settings.queue_open) return fail('A fila fechou por hoje. Valeu por cantar com a gente!', 403);
-  const song = parseSong(await readBody(req), settings);
+  const body = await readBody(req);
+  const song = parseSong(body, settings);
   if (typeof song === 'string') return fail(song);
+  if (!signed(body)) return fail(BAD_SIG, 422);
   if (!(await canEmbed(song.video_id))) return fail(NOT_EMBEDDABLE, 422);
 
   // One trip to the database decides: queue, reserve or "you already have enough".
@@ -83,6 +93,38 @@ export async function POST(req: NextRequest) {
     return fail('Não deu pra adicionar agora. Tenta de novo.', 500);
   }
   return json({ ok: true, where: 'queue' });
+}
+
+/**
+ * "Trocar a música": the customer swaps the song waiting in the queue for another one and keeps
+ * the place in line.
+ */
+export async function PUT(req: NextRequest) {
+  const { singer, error: authError } = await who(req);
+  if (authError) return authError;
+  if (!singer) return fail('Entre com seu nome primeiro', 401);
+  if (singer.status === 'blocked') return fail('Poxa, você não tá liberado pra cantar hoje.', 403);
+  let settings;
+  try {
+    settings = await getSettings();
+  } catch {
+    return fail('Deu uma travadinha aqui. Tenta de novo em instantes.', 503);
+  }
+  if (!settings.queue_open) return fail('A fila fechou por hoje. Valeu por cantar com a gente!', 403);
+  const body = await readBody(req);
+  const song = parseSong(body, settings);
+  if (typeof song === 'string') return fail(song);
+  if (!signed(body)) return fail(BAD_SIG, 422);
+  if (!(await canEmbed(song.video_id))) return fail(NOT_EMBEDDABLE, 422);
+  const { data, error } = await db()
+    .from('queue')
+    .update(song)
+    .eq('singer_id', singer.id)
+    .eq('status', 'waiting')
+    .select('id');
+  if (error) return fail('Não deu pra trocar agora. Tenta de novo.', 500);
+  if (!data?.length) return fail('Sua música já começou ou saiu da fila. Escolhe outra lá embaixo!', 409);
+  return json({ ok: true });
 }
 
 /**

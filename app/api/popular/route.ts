@@ -1,4 +1,5 @@
 import { db } from '@/lib/supabase-server';
+import { signSong } from '@/lib/songsig';
 import type { PopularSong } from '@/lib/types';
 import { NextResponse } from 'next/server';
 
@@ -28,7 +29,7 @@ export async function GET() {
           count: 1,
         });
     }
-    songs = [...byId.values()].sort((a, b) => b.count - a.count).slice(0, 12);
+    songs = [...byId.values()].sort((a, b) => b.count - a.count).slice(0, 12).map(signSong);
   } catch (e) {
     console.error('popular failed', e);
   }

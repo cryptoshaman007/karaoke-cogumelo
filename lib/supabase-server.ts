@@ -27,11 +27,15 @@ export async function getSettings(): Promise<Settings> {
  * playing; if something else is already playing the database changes nothing.
  */
 export async function advanceQueue(current: number | null, endStatus: 'done' | 'skipped'): Promise<number | null> {
+  // what was playing before, to know afterwards if the queue really moved
+  const pre = await db().from('queue').select('id').eq('status', 'playing').maybeSingle();
+  const before = pre.error ? current : ((pre.data as { id: number } | null)?.id ?? null);
   const { data, error } = await db().rpc('advance_queue', { p_current: current, p_end_status: endStatus });
   if (error) throw error;
-  // A new song never starts paused. Ignored if the column does not exist yet.
-  await db().from('settings').update({ paused: false }).eq('id', 1).eq('paused', true);
   let playing = (data as number | null) ?? null;
+  // A new song never starts paused. A repeated "song ended" that changed nothing must not undo a
+  // pause the admin just made, so only when the queue moved. Ignored if the column does not exist yet.
+  if (playing !== before) await db().from('settings').update({ paused: false }).eq('id', 1).eq('paused', true);
   // Whoever just sang gets their reserve song at the end of the queue. If the queue was empty,
   // that reserve is the next song: start it right away.
   if ((await promoteReserves()) > 0 && playing == null) {

@@ -1,5 +1,8 @@
 import type { Settings } from './types';
 
+/** Words that mark a karaoke version in a video title. */
+export const KARAOKE_RE = /karaok[eê]|videok[eê]|sing ?along|vers[aã]o karaok/i;
+
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{6,20}$/;
 
 export interface SongInput {

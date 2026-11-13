@@ -78,7 +78,8 @@ export function useLive({ admin = false, selfId = null, tv = false }: Options = 
       if (admin) {
         const since = new Date(Date.now() - PENDING_WINDOW_MS).toISOString();
         list.push(
-          sb.from('singers').select(cols).eq('status', 'pending').gte('created_at', since).order('created_at').limit(100),
+          // newest first: real people arriving now are never hidden behind a pile of old (or fake) names
+          sb.from('singers').select(cols).eq('status', 'pending').gte('created_at', since).order('created_at', { ascending: false }).limit(200),
           sb.from('singers').select(cols).eq('status', 'blocked').order('created_at', { ascending: false }).limit(50),
         );
       }
@@ -256,6 +257,51 @@ async function send(method: string, url: string, body: unknown, headers: Record<
 export const get = (url: string, headers: Record<string, string> = {}) => send('GET', url, undefined, headers);
 export const post = (url: string, body: unknown, headers: Record<string, string> = {}) => send('POST', url, body, headers);
 export const del = (url: string, headers: Record<string, string> = {}) => send('DELETE', url, undefined, headers);
+export const put = (url: string, body: unknown, headers: Record<string, string> = {}) => send('PUT', url, body, headers);
+
+/**
+ * Listens to INSERTs on one table (reactions, GIFs on the projector). The channel gets a fresh
+ * name each time and is rebuilt by itself if it drops or never joins (internet out when the
+ * screen was rebuilt), so the effects never stay dead until someone reloads the page.
+ */
+export function listenInserts(table: string, onRow: (row: Record<string, unknown>) => void): () => void {
+  const sb = browserClient();
+  let ch: RealtimeChannel | null = null;
+  let stopped = false;
+  let retry: ReturnType<typeof setTimeout> | null = null;
+  let joinedAt = 0;
+  const connect = () => {
+    if (stopped) return;
+    const mine = sb
+      .channel(`karaoke-${table}-${Math.random().toString(36).slice(2)}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table }, (payload) => onRow(payload.new as Record<string, unknown>));
+    ch = mine;
+    mine.subscribe((status) => {
+      if (stopped || ch !== mine) return;
+      if (status === 'SUBSCRIBED') joinedAt = Date.now();
+      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') rebuild();
+    });
+    // never joined: try again from scratch
+    if (retry) clearTimeout(retry);
+    retry = setTimeout(() => !stopped && ch === mine && !joinedAt && rebuild(), 30000);
+  };
+  const rebuild = () => {
+    if (stopped) return;
+    const old = ch;
+    ch = null;
+    joinedAt = 0;
+    if (old) sb.removeChannel(old).catch(() => {});
+    if (retry) clearTimeout(retry);
+    retry = setTimeout(connect, 5000);
+  };
+  connect();
+  return () => {
+    stopped = true;
+    if (retry) clearTimeout(retry);
+    if (ch) sb.removeChannel(ch).catch(() => {});
+    ch = null;
+  };
+}
 
 export const fmt = (s: number) => {
   const t = Math.max(0, Math.floor(s));

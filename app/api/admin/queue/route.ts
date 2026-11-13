@@ -1,12 +1,13 @@
 import { NextRequest } from 'next/server';
 import { advanceQueue, db, getSettings, promoteReserves } from '@/lib/supabase-server';
-import { hashToken, isAdmin, newSingerToken } from '@/lib/auth';
+import { hashToken, requireAdmin, newSingerToken } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
 import { cleanName, parseSong } from '@/lib/song';
 import { canEmbed, NOT_EMBEDDABLE } from '@/lib/embed';
 
 export async function POST(req: NextRequest) {
-  if (!(await isAdmin())) return fail('Faça login no admin', 401);
+  const denied = await requireAdmin();
+  if (denied) return denied;
   const body = await readBody(req);
   const action = String(body.action ?? '');
   const id = Number(body.id);
