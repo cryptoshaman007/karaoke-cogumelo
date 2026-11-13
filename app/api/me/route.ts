@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
   try {
     singer = await singerFromRequest(req);
   } catch {
-    return fail('Tente de novo em instantes', 503);
+    return fail('Deu uma travadinha aqui. Tenta de novo em instantes.', 503);
   }
   if (!singer) return fail('Não encontrado', 404);
   return json({ singer });

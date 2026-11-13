@@ -1,8 +1,9 @@
 import { NextRequest } from 'next/server';
-import { advanceQueue, db, getSettings } from '@/lib/supabase-server';
+import { advanceQueue, db, getSettings, promoteReserves } from '@/lib/supabase-server';
 import { hashToken, isAdmin, newSingerToken } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
 import { cleanName, parseSong } from '@/lib/song';
+import { canEmbed, NOT_EMBEDDABLE } from '@/lib/embed';
 
 export async function POST(req: NextRequest) {
   if (!(await isAdmin())) return fail('Faça login no admin', 401);
@@ -23,10 +24,13 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(id)) return fail('Música inválida');
     const { error } = await sb.from('queue').update({ status: 'skipped' }).eq('id', id).eq('status', 'waiting');
     if (error) return fail(error.message, 500);
+    await promoteReserves();
     return json({ ok: true });
   }
 
   if (action === 'clear') {
+    // "clear" means clear: reserve songs go too (ignored if that table does not exist yet)
+    await sb.from('reserves').delete().gt('id', 0);
     const { error } = await sb.from('queue').update({ status: 'skipped' }).eq('status', 'waiting');
     if (error) return fail(error.message, 500);
     return json({ ok: true });
@@ -39,7 +43,7 @@ export async function POST(req: NextRequest) {
       .eq('status', 'waiting')
       .order('position')
       .order('id');
-    if (error || !rows) return fail('Não foi possível reordenar', 500);
+    if (error || !rows) return fail('Não deu pra mudar a ordem agora. Tenta de novo.', 500);
     const i = rows.findIndex((r) => r.id === id);
     if (i < 0) return json({ ok: true });
 
@@ -73,19 +77,28 @@ export async function POST(req: NextRequest) {
   // Admin puts a song in the queue for someone who has no phone at hand.
   if (action === 'add') {
     const name = cleanName(body.name);
-    if (!name) return fail('Digite o nome da pessoa');
-    const song = parseSong((body.song ?? {}) as Record<string, unknown>, await getSettings());
+    if (!name) return fail('Põe o nome da pessoa');
+    let settings;
+    try {
+      settings = await getSettings();
+    } catch {
+      return fail('Deu uma travadinha aqui. Tenta de novo em instantes.', 503);
+    }
+    // from the projector's own button: only while the admin leaves it switched on
+    if (body.from === 'tv' && !settings.tv_add_enabled) return fail('Adicionar pelo telão está desligado.', 403);
+    const song = parseSong((body.song ?? {}) as Record<string, unknown>, settings);
     if (typeof song === 'string') return fail(song);
+    if (!(await canEmbed(song.video_id))) return fail(NOT_EMBEDDABLE, 422);
     const { data: singer, error: e1 } = await sb
       .from('singers')
       .insert({ name, token_hash: hashToken(newSingerToken()), status: 'approved' })
       .select('id')
       .single();
-    if (e1 || !singer) return fail('Não foi possível adicionar', 500);
+    if (e1 || !singer) return fail('Não deu pra adicionar agora. Tenta de novo.', 500);
     const { error: e2 } = await sb.from('queue').insert({ singer_id: singer.id, ...song, position: Date.now() / 1000 });
     if (e2) {
       await sb.from('singers').delete().eq('id', singer.id);
-      return fail('Não foi possível adicionar', 500);
+      return fail('Não deu pra adicionar agora. Tenta de novo.', 500);
     }
     return json({ ok: true });
   }

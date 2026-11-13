@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
   const { error } = await db().from('singers').update({ status }).eq('id', id);
   if (error) return fail(error.message, 500);
   if (status === 'blocked') {
+    await db().from('reserves').delete().eq('singer_id', id);
     await db().from('queue').update({ status: 'skipped' }).eq('singer_id', id).eq('status', 'waiting');
   }
   return json({ ok: true });

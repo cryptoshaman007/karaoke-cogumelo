@@ -8,11 +8,16 @@ import { cleanName } from '@/lib/song';
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
   const name = cleanName(body.name);
-  if (!name) return fail('Digite seu nome');
+  if (!name) return fail('Diz aí como a gente te chama');
   // Generous on purpose: the whole bar shares one Wi-Fi address.
   const key = `join:${clientIp(req)}`;
-  if (await tooMany(key, 40, 10 * 60)) return fail('Muita gente entrando ao mesmo tempo. Tente em um minuto.', 429);
-  const settings = await getSettings();
+  if (await tooMany(key, 120, 10 * 60)) return fail('Tá entrando muita gente ao mesmo tempo! Tenta de novo em um minutinho.', 429);
+  let settings;
+  try {
+    settings = await getSettings();
+  } catch {
+    return fail('Não deu pra entrar agora. Tenta de novo.', 503);
+  }
   const token = newSingerToken();
   const { data, error } = await db()
     .from('singers')
@@ -23,7 +28,7 @@ export async function POST(req: NextRequest) {
     })
     .select('id, name, status, created_at')
     .single();
-  if (error) return fail('Não foi possível entrar agora', 500);
+  if (error) return fail('Não deu pra entrar agora. Tenta de novo.', 500);
   await recordHit(key);
   return json({ token, singer: data });
 }

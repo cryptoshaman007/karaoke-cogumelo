@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon from './Icon';
 import { fmt } from '@/lib/useLive';
+import { timeoutSignal } from '@/lib/timeout';
 import type { PopularSong, SearchResult } from '@/lib/types';
 
 interface Props {
@@ -40,13 +41,15 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
     setBusy(true);
     setErr('');
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(term)}`, { headers: authHeaders });
+      const res = await fetch(`/api/search?q=${encodeURIComponent(term)}`, { headers: authHeaders, signal: timeoutSignal(24000) });
       const d = await res.json().catch(() => ({}));
       if (mine !== reqId.current) return;
-      if (!res.ok) throw new Error(d.error ?? 'A busca falhou. Tente de novo.');
+      if (!res.ok) throw new Error(d.error ?? 'A busca falhou. Tenta de novo.');
       setResults(d.results ?? []);
     } catch (e) {
-      if (mine === reqId.current) setErr((e as Error).message || 'A busca falhou. Tente de novo.');
+      const name = (e as Error).name;
+      const msg = name === 'TimeoutError' || name === 'AbortError' || e instanceof TypeError ? 'A busca demorou demais. Tenta de novo.' : (e as Error).message;
+      if (mine === reqId.current) setErr(msg || 'A busca falhou. Tenta de novo.');
     } finally {
       if (mine === reqId.current) setBusy(false);
     }
@@ -72,7 +75,7 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
       <form className="searchbar" onSubmit={search} role="search">
         <input
           type="search"
-          placeholder="Música ou artista"
+          placeholder="Qual música você quer cantar?"
           aria-label="Buscar música ou artista"
           value={q}
           maxLength={100}
@@ -86,7 +89,7 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
       </form>
       {err && <p className="error" role="alert">{err}</p>}
       {results && results.length === 0 && !busy && (
-        <p className="muted empty">Nenhum karaokê encontrado. Tente o nome da música junto com o artista.</p>
+        <p className="muted empty">Não achei karaokê disso. Tenta o nome da música junto com o artista.</p>
       )}
       {!results && list && <h2 className="section-title">Mais cantadas no Cogumelo</h2>}
       {list && list.length > 0 && (

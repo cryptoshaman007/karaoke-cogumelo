@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Karaokê Cogumelo',
-  description: 'Escaneie, escolha sua música e cante!',
+  description: 'Escaneia, escolhe a música e solta a voz!',
   robots: { index: false, follow: false },
 };
 

@@ -1,5 +1,6 @@
 import 'server-only';
 import type { SearchResult } from './types';
+import { withTimeout } from './timeout';
 
 // Busca sem chave de API usando a mesma interface interna do site do YouTube (youtubei.js).
 // Não é oficial: se parar de funcionar, troque esta função pela YouTube Data API.
@@ -24,14 +25,16 @@ const KARAOKE_RE = /karaok[eê]|videok[eê]|sing ?along|vers[aã]o karaok/i;
 const cache = new Map<string, { at: number; results: SearchResult[] }>();
 const CACHE_MS = 30 * 60 * 1000;
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('timeout')), ms);
-    p.then(
-      (v) => (clearTimeout(t), resolve(v)),
-      (e) => (clearTimeout(t), reject(e)),
-    );
-  });
+async function searchOnce(term: string) {
+  // A slow start is not thrown away: if it times out here, the next try picks up the same session.
+  const client = await withTimeout(yt(), 8000);
+  try {
+    return await withTimeout(client.search(term, { type: 'video' }), 7000);
+  } catch (e) {
+    // the session may have gone stale: start a fresh one on the next try
+    ytPromise = null;
+    throw e;
+  }
 }
 
 export async function searchKaraoke(query: string, maxDurationSec: number): Promise<SearchResult[]> {
@@ -44,13 +47,20 @@ export async function searchKaraoke(query: string, maxDurationSec: number): Prom
   } else {
     const term = KARAOKE_RE.test(q) ? q : `${q} karaoke`;
     let res;
+    const startedAt = Date.now();
     try {
-      const client = await yt();
-      res = await withTimeout(client.search(term, { type: 'video' }), 8000);
-    } catch (e) {
-      // the session may have gone stale: start a fresh one on the next search
-      ytPromise = null;
-      throw e;
+      res = await searchOnce(term);
+    } catch (first) {
+      console.error('search failed', first);
+      try {
+        // one more try with a new session, unless the person has already waited too long
+        if (Date.now() - startedAt > 9000) throw first;
+        res = await searchOnce(term);
+      } catch (e) {
+        // YouTube is not answering: an old answer for the same search is better than an error
+        if (hit) return hit.results.filter((r) => r.durationSec <= maxDurationSec);
+        throw e;
+      }
     }
     const seen = new Set<string>();
     results = [];
