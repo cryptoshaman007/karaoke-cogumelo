@@ -15,10 +15,10 @@ export function parseSong(body: Record<string, unknown>, settings: Settings): So
   const title = String(body.title ?? '').trim().slice(0, 200);
   const durationSec = Math.round(Number(body.durationSec));
   if (!VIDEO_ID_RE.test(videoId) || !title || !Number.isFinite(durationSec) || durationSec <= 0) {
-    return 'Música inválida';
+    return 'Não deu pra usar essa música. Escolhe outra!';
   }
   if (durationSec > settings.max_duration_sec) {
-    return `Músicas de até ${Math.floor(settings.max_duration_sec / 60)} minutos`;
+    return `Essa é longa demais. Só músicas de até ${Math.floor(settings.max_duration_sec / 60)} minutos.`;
   }
   return {
     video_id: videoId,

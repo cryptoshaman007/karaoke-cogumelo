@@ -12,7 +12,7 @@ export async function GET() {
   try {
     settings = await getSettings();
   } catch {
-    return fail('Tente de novo em instantes', 503);
+    return fail('Deu uma travadinha aqui. Tenta de novo em instantes.', 503);
   }
   if (!settings.contest_id) return json({ contestId: null, standings: [] });
   const { data, error } = await db().rpc('contest_standings', { p_contest: settings.contest_id });

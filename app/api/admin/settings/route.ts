@@ -24,6 +24,18 @@ export async function POST(req: NextRequest) {
     patch.tv_message = String(body.tvMessage).replace(/\s+/g, ' ').trim().slice(0, 140);
   }
   if (body.reactionsEnabled != null) patch.reactions_enabled = Boolean(body.reactionsEnabled);
+  if (body.rankingEnabled != null) {
+    patch.ranking_enabled = Boolean(body.rankingEnabled);
+    if (!patch.ranking_enabled) patch.ranking_on_tv = false;
+  }
+  if (body.rankingOnTv != null) patch.ranking_on_tv = Boolean(body.rankingOnTv);
+  if (body.gifsEnabled != null) patch.gifs_enabled = Boolean(body.gifsEnabled);
+  if (body.nightResetHour !== undefined) {
+    // null or a negative number turns the automatic clean-up off
+    const h = body.nightResetHour === null ? -1 : Math.round(Number(body.nightResetHour));
+    if (!Number.isFinite(h) || h > 23) return fail('Hora entre 0 e 23');
+    patch.night_reset_hour = h < 0 ? null : h;
+  }
   if (body.paused != null) patch.paused = Boolean(body.paused);
   if (body.volume != null) {
     const v = Math.round(Number(body.volume));
@@ -41,7 +53,7 @@ export async function POST(req: NextRequest) {
   if (error) {
     // 42703 / PGRST204: the database is still missing the newer columns
     if (error.code === '42703' || error.code === 'PGRST204') {
-      return fail('Esta função precisa da atualização do banco de dados (migrações em supabase/migrations).', 409);
+      return fail('Essa função ainda precisa da atualização do banco de dados (migrações em supabase/migrations).', 409);
     }
     return fail(error.message, 500);
   }

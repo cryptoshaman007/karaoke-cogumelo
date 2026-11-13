@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
       .eq('status', 'waiting')
       .order('position')
       .order('id');
-    if (error || !rows) return fail('Não foi possível reordenar', 500);
+    if (error || !rows) return fail('Não deu pra mudar a ordem agora. Tenta de novo.', 500);
     const i = rows.findIndex((r) => r.id === id);
     if (i < 0) return json({ ok: true });
 
@@ -74,12 +74,12 @@ export async function POST(req: NextRequest) {
   // Admin puts a song in the queue for someone who has no phone at hand.
   if (action === 'add') {
     const name = cleanName(body.name);
-    if (!name) return fail('Digite o nome da pessoa');
+    if (!name) return fail('Põe o nome da pessoa');
     let settings;
     try {
       settings = await getSettings();
     } catch {
-      return fail('Tente de novo em instantes', 503);
+      return fail('Deu uma travadinha aqui. Tenta de novo em instantes.', 503);
     }
     const song = parseSong((body.song ?? {}) as Record<string, unknown>, settings);
     if (typeof song === 'string') return fail(song);
@@ -89,11 +89,11 @@ export async function POST(req: NextRequest) {
       .insert({ name, token_hash: hashToken(newSingerToken()), status: 'approved' })
       .select('id')
       .single();
-    if (e1 || !singer) return fail('Não foi possível adicionar', 500);
+    if (e1 || !singer) return fail('Não deu pra adicionar agora. Tenta de novo.', 500);
     const { error: e2 } = await sb.from('queue').insert({ singer_id: singer.id, ...song, position: Date.now() / 1000 });
     if (e2) {
       await sb.from('singers').delete().eq('id', singer.id);
-      return fail('Não foi possível adicionar', 500);
+      return fail('Não deu pra adicionar agora. Tenta de novo.', 500);
     }
     return json({ ok: true });
   }

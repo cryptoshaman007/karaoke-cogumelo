@@ -355,7 +355,7 @@ await test('vídeo bloqueado para embed: pula sozinho e avisa', async () => {
   const t = await until(page, async () => b.queue[1].status === 'playing', 30000);
   expect(t >= 0, `não passou para a próxima: ${statuses(b)}`);
   expect(b.queue[0].status === 'skipped', 'a bloqueada deveria ficar como pulada');
-  expect((await page.locator('.toast').textContent())?.includes('não pôde ser tocado'), 'sem aviso no telão');
+  expect((await page.locator('.toast').textContent())?.includes('não quis tocar'), 'sem aviso no telão');
   await ctx.close();
 });
 
@@ -721,7 +721,7 @@ await test('botões do telão: pausar, voltar ao início e pular', async () => {
   expect((await until(page, async () => (await yt(page)).state === 2, 5000)) >= 0, 'não pausou');
   await run(page, 30000);
   expect((await yt(page)).state === 2, 'voltou a tocar sozinho durante a pausa');
-  await page.getByRole('button', { name: 'Continuar' }).click();
+  await page.getByRole('button', { name: 'Bora cantar' }).click();
   expect((await until(page, async () => (await yt(page)).state === 1, 5000)) >= 0, 'não continuou');
   await page.getByRole('button', { name: 'Voltar ao início da música' }).click();
   expect((await until(page, async () => (await yt(page)).time < 10, 5000)) >= 0, 'não voltou ao início');
@@ -744,7 +744,7 @@ async function openPhone(b) {
   await page.goto(BASE + '/cantar');
   await run(page, 500);
   await page.getByPlaceholder('Seu nome').fill('Zeca');
-  await page.getByRole('button', { name: 'Continuar' }).click();
+  await page.getByRole('button', { name: 'Bora cantar' }).click();
   await run(page, 1500);
   return { page, ctx, errors };
 }

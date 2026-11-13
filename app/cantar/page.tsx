@@ -1,10 +1,11 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import GifSheet from '@/components/GifSheet';
 import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
 import { del, get, post, useLive } from '@/lib/useLive';
 import { timeoutSignal } from '@/lib/timeout';
-import { REACTIONS, SCORE_EMOJIS, SCORE_LABELS, type QueueItem, type SearchResult, type Singer } from '@/lib/types';
+import { fmtScore, REACTIONS, SCORE_EMOJIS, SCORE_LABELS, scorePhrase, type QueueItem, type SearchResult, type Singer } from '@/lib/types';
 
 const TOKEN_KEY = 'karaoke_token';
 
@@ -110,13 +111,13 @@ function Join({ onJoined }: { onJoined: (token: string, singer: Singer) => void 
           <span className="brand-mark">🍄</span>
           <div>
             <strong>Karaokê Cogumelo</strong>
-            <span className="muted small">Escolha sua música e cante no telão</span>
+            <span className="muted small">Escolhe a música e solta a voz no telão</span>
           </div>
         </div>
         <label className="field">
-          <span>Como devemos te chamar?</span>
+          <span>Como a gente te chama?</span>
           <input
-            placeholder="Seu nome"
+            placeholder="Seu nome ou apelido"
             maxLength={40}
             autoComplete="given-name"
             value={name}
@@ -126,7 +127,7 @@ function Join({ onJoined }: { onJoined: (token: string, singer: Singer) => void 
         </label>
         {err && <p className="error" role="alert">{err}</p>}
         <button className="btn primary block" disabled={busy || !name.trim()}>
-          {busy ? 'Entrando…' : 'Continuar'}
+          {busy ? 'Entrando…' : 'Bora cantar'}
         </button>
       </form>
     </main>
@@ -134,7 +135,9 @@ function Join({ onJoined }: { onJoined: (token: string, singer: Singer) => void 
 }
 
 function Room({ me, token }: { me: Singer; token: string }) {
-  const { queue, singers, settings, results, loaded, refresh } = useLive({ selfId: me.id });
+  const { queue, singers, settings, results, ranking, loaded, refresh } = useLive({ selfId: me.id });
+  const [gifOpen, setGifOpen] = useState(false);
+  const [gifSent, setGifSent] = useState(false);
   const [err, setErr] = useState('');
   const [now, setNow] = useState(() => Date.now());
 
@@ -152,6 +155,11 @@ function Room({ me, token }: { me: Singer; token: string }) {
   const open = settings?.queue_open ?? true;
   const contestOn = !!settings?.contest_id;
   const canInteract = self.status === 'approved';
+  const rankingOn = !!settings?.ranking_enabled && !contestOn;
+  const myBest = rankingOn ? ranking.find((r) => r.singer_id === me.id) ?? null : null;
+  const myPos = myBest ? ranking.indexOf(myBest) + 1 : 0;
+  const showReact = !!playing && canInteract && !!settings?.reactions_enabled;
+  const showGif = canInteract && !!settings?.gifs_enabled;
 
   // rough wait: what is left of the current song + everything ahead + the pauses between songs
   let waitMin: number | null = null;
@@ -187,7 +195,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
   );
 
   async function removeMine() {
-    if (!confirm('Tirar sua música da fila?')) return;
+    if (!confirm('Tirar sua música da fila? Você pode escolher outra depois.')) return;
     setErr('');
     try {
       await del('/api/queue', { 'x-singer-token': token });
@@ -210,11 +218,11 @@ function Room({ me, token }: { me: Singer; token: string }) {
       </header>
 
       {self.status === 'blocked' && (
-        <p className="banner danger">O admin não liberou você para cantar hoje.</p>
+        <p className="banner danger">Poxa, o admin não liberou você pra cantar hoje.</p>
       )}
       {self.status === 'pending' && (
         <p className="banner warn">
-          Aguardando o admin liberar sua entrada. {entry ? 'Sua música entra na fila assim que ele aprovar.' : 'Você já pode escolher a música.'}
+          Só um instante: o admin já vai liberar sua entrada. {entry ? 'Sua música entra na fila assim que ele aprovar.' : 'Enquanto isso, já vai escolhendo a música.'}
         </p>
       )}
       {err && <p className="error" role="alert">{err}</p>}
@@ -224,7 +232,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
           <span className="label">🏆 Resultado do campeonato</span>
           {results[0]?.score != null && (
             <p className="big-msg">
-              {results[0].name} venceu!
+              {results[0].name} levou a melhor! 🎉
             </p>
           )}
           <Ranking rows={results} limit={10} highlightFirst />
@@ -234,34 +242,34 @@ function Room({ me, token }: { me: Singer; token: string }) {
       {contestOn && playing && playing.singer_id === me.id && (
         <section className="card contest">
           <span className="label">🏆 Campeonato valendo</span>
-          <p>A galera está dando nota para você agora. Capricha!</p>
+          <p>A galera tá dando nota pra você agora. Capricha!</p>
         </section>
       )}
       {contestOn && playing && playing.singer_id !== me.id && canInteract && (
-        <VoteCard token={token} playing={playing} performer={singers[playing.singer_id]?.name ?? 'quem está cantando'} />
+        <VoteCard token={token} playing={playing} performer={singers[playing.singer_id]?.name ?? 'quem tá cantando'} />
       )}
       {contestOn && !playing && (
-        <p className="banner contest-banner">🏆 Campeonato valendo! Dê sua nota para cada pessoa enquanto ela canta.</p>
+        <p className="banner contest-banner">🏆 Campeonato valendo! Dá sua nota pra cada um enquanto canta.</p>
       )}
 
       {self.status !== 'blocked' && entry && (
         <section className={`card mysong ${stage}`}>
           <span className="label">
-            {entry.status === 'playing' ? 'Cantando agora' : self.status === 'pending' ? 'Sua música' : 'Sua música na fila'}
+            {entry.status === 'playing' ? 'Você tá no palco' : self.status === 'pending' ? 'Sua música' : 'Sua música tá na fila'}
           </span>
           <div className="mysong-row">
             {entry.thumbnail && <img src={entry.thumbnail} alt="" width={112} height={63} />}
             <strong>{entry.title}</strong>
           </div>
           {entry.status === 'playing' ? (
-            <p className="big-msg">É a sua vez! Pega o microfone 🎤</p>
+            <p className="big-msg">É a sua vez! Pega o microfone e arrasa 🎤</p>
           ) : self.status === 'pending' ? null : ahead === 0 ? (
-            <p className="big-msg">Você é o próximo. Prepare-se!</p>
+            <p className="big-msg">Você é o próximo! Vai aquecendo a voz 🔥</p>
           ) : ahead > 0 ? (
             <div className="stats">
               <div>
                 <strong>{ahead}</strong>
-                <span className="muted small">{ahead === 1 ? 'pessoa na frente' : 'pessoas na frente'}</span>
+                <span className="muted small">{ahead === 1 ? 'pessoa na sua frente' : 'pessoas na sua frente'}</span>
               </div>
               {waitMin !== null && (
                 <div>
@@ -273,14 +281,14 @@ function Room({ me, token }: { me: Singer; token: string }) {
           ) : null}
           {entry.status === 'waiting' && (
             <button className="btn ghost" onClick={removeMine}>
-              Trocar ou tirar música
+              Trocar ou tirar a música
             </button>
           )}
         </section>
       )}
 
       {self.status !== 'blocked' && !entry && !open && (
-        <p className="banner">A fila está fechada por hoje. Obrigado por cantar com a gente!</p>
+        <p className="banner">A fila fechou por hoje. Valeu por cantar com a gente!</p>
       )}
 
       {self.status !== 'blocked' && !entry && open && (
@@ -293,14 +301,14 @@ function Room({ me, token }: { me: Singer; token: string }) {
             showPopular
           />
           <p className="muted small hint">
-            Só versões karaokê de até {Math.floor(maxDurationSec / 60)} minutos. Uma música por vez.
+            Só versão karaokê, de até {Math.floor(maxDurationSec / 60)} minutos. Uma música por vez, pra todo mundo cantar.
           </p>
         </section>
       )}
 
       {(playing || line.length > 0) && (
         <section className="card">
-          <span className="label">Fila agora</span>
+          <span className="label">A fila agora</span>
           <ol className="line">
             {playing && (
               <li className={playing.singer_id === me.id ? 'me' : ''}>
@@ -325,7 +333,40 @@ function Room({ me, token }: { me: Singer; token: string }) {
         </section>
       )}
 
-      {playing && canInteract && settings?.reactions_enabled && <ReactionBar token={token} />}
+      {rankingOn && (
+        <section className="card">
+          <span className="label">⭐ Ranking da noite</span>
+          {myBest?.score != null && (
+            <p className="big-msg">
+              Sua nota: {fmtScore(myBest.score)} · {myPos}º lugar. {scorePhrase(myBest.score)}
+            </p>
+          )}
+          <Ranking
+            rows={ranking}
+            limit={5}
+            highlightFirst
+            unit="reactions"
+            mine={(r) => r.singer_id === me.id}
+            empty="Ninguém pontuou ainda. A nota sai das reações da galera no fim de cada música."
+          />
+          {ranking.length > 0 && <span className="muted small">Quanto mais gente reagir enquanto você canta, maior a nota.</span>}
+        </section>
+      )}
+
+      {(showReact || showGif) && (
+        <ReactionBar token={token} reactions={showReact} gifs={showGif} gifSent={gifSent} onGif={() => (setGifSent(false), setGifOpen(true))} />
+      )}
+      {gifOpen && showGif && (
+        <GifSheet
+          token={token}
+          onClose={() => setGifOpen(false)}
+          onSent={() => {
+            setGifOpen(false);
+            setGifSent(true);
+            setTimeout(() => setGifSent(false), 2500);
+          }}
+        />
+      )}
     </main>
   );
 }
@@ -369,7 +410,7 @@ function VoteCard({ token, playing, performer }: { token: string; playing: Queue
     <section className="card contest">
       <span className="label">🏆 Campeonato · sua nota</span>
       <p>
-        O que você está achando de <strong>{performer}</strong>?
+        E aí, o que você tá achando de <strong>{performer}</strong>?
       </p>
       <div className="votes" role="radiogroup" aria-label={`Nota para ${performer}`}>
         {SCORE_EMOJIS.map((emoji, i) => (
@@ -388,14 +429,14 @@ function VoteCard({ token, playing, performer }: { token: string; playing: Queue
       {err ? (
         <p className="error" role="alert">{err}</p>
       ) : (
-        <p className="muted small">{vote ? `${SCORE_LABELS[vote - 1]}! Dá para mudar até a música acabar.` : 'Toque em uma carinha. A votação fecha quando a música acabar.'}</p>
+        <p className="muted small">{vote ? `${SCORE_LABELS[vote - 1]}! Dá pra mudar até a música acabar.` : 'Toca numa carinha. A votação fecha quando a música acabar.'}</p>
       )}
     </section>
   );
 }
 
 /** Quick reactions that float on the projector while someone sings. */
-function ReactionBar({ token }: { token: string }) {
+function ReactionBar({ token, reactions, gifs, gifSent, onGif }: { token: string; reactions: boolean; gifs: boolean; gifSent: boolean; onGif: () => void }) {
   const lastAt = useRef(0);
   const [pops, setPops] = useState<{ id: number; i: number }[]>([]);
   const [msg, setMsg] = useState('');
@@ -416,9 +457,14 @@ function ReactionBar({ token }: { token: string }) {
   }
 
   return (
-    <div className="reactbar" aria-label="Mandar reação para o telão">
-      {msg && <span className="reactbar-msg">{msg}</span>}
-      {REACTIONS.map((r, i) => (
+    <div className="reactbar" aria-label="Mandar reação pro telão">
+      {(msg || gifSent) && <span className="reactbar-msg">{msg || 'Foi pro telão! 🎉'}</span>}
+      {gifs && (
+        <button className="gif-btn" aria-label="Mandar GIF ou figurinha pro telão" onClick={onGif}>
+          GIF
+        </button>
+      )}
+      {reactions && REACTIONS.map((r, i) => (
         <button key={r.key} aria-label={r.label} onClick={() => send(i)}>
           {r.emoji}
           {pops

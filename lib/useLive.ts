@@ -11,6 +11,8 @@ export interface LiveState {
   settings: Settings | null;
   /** final ranking of the contest whose results are on screen (null = nothing to show) */
   results: Standing[] | null;
+  /** night ranking, best grade first (empty while the mode is off or nobody was graded yet) */
+  ranking: Standing[];
   loaded: boolean;
   refresh: () => Promise<void>;
 }
@@ -30,6 +32,7 @@ const ID_CHUNK = 80;
 const POLL_MS = 20000;
 const POLL_DOWN_MS = 5000;
 const REBUILD_AFTER_MS = 60000;
+const RANKING_SIZE = 20;
 
 /** Live view of the queue, singers and settings via Supabase Realtime (read-only). */
 export function useLive({ admin = false, selfId = null, tv = false }: Options = {}): LiveState {
@@ -37,8 +40,9 @@ export function useLive({ admin = false, selfId = null, tv = false }: Options = 
   const [singers, setSingers] = useState<Record<string, Singer>>({});
   const [settings, setSettings] = useState<Settings | null>(null);
   const [results, setResults] = useState<Standing[] | null>(null);
+  const [ranking, setRanking] = useState<Standing[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const last = useRef({ q: '', s: '', st: '', r: 'null' });
+  const last = useRef({ q: '', s: '', st: '', r: 'null', rk: '[]' });
   const inflight = useRef<Promise<void> | null>(null);
   const again = useRef(false);
   const alive = useRef(true);
@@ -51,7 +55,17 @@ export function useLive({ admin = false, selfId = null, tv = false }: Options = 
     ]);
     if (q.error || !q.data) return; // offline or hiccup: keep what is on screen
     const rows = q.data as QueueItem[];
-    const ids = [...new Set(rows.map((r) => r.singer_id).concat(selfId ? [selfId] : []))];
+    const norm = st.data ? normalizeSettings(st.data as Partial<Settings>) : null;
+
+    // night ranking: the graded songs of this night. A failure here only leaves the ranking as it was.
+    let graded: QueueItem[] | null = norm && !norm.ranking_enabled ? [] : null;
+    if (norm?.ranking_enabled) {
+      let rq = sb.from('queue').select('id, singer_id, title, video_id, score, reaction_count').not('score', 'is', null);
+      if (norm.night_started_at) rq = rq.gte('started_at', norm.night_started_at);
+      const rk = await rq.order('score', { ascending: false }).order('reaction_count', { ascending: false }).order('id').limit(RANKING_SIZE);
+      if (!rk.error && rk.data) graded = rk.data as QueueItem[];
+    }
+    const ids = [...new Set(rows.map((r) => r.singer_id).concat(selfId ? [selfId] : [], (graded ?? []).map((g) => g.singer_id)))];
 
     // in slices, so a very long queue never produces an address too long for the server
     const singerQueries = [];
@@ -65,7 +79,6 @@ export function useLive({ admin = false, selfId = null, tv = false }: Options = 
         sb.from('singers').select(SINGER_COLS).eq('status', 'blocked').order('created_at', { ascending: false }).limit(50),
       );
     }
-    const norm = st.data ? normalizeSettings(st.data as Partial<Settings>) : null;
     const [res, contest] = await Promise.all([
       Promise.all(singerQueries),
       norm?.results_contest_id
@@ -82,6 +95,19 @@ export function useLive({ admin = false, selfId = null, tv = false }: Options = 
     const ss = JSON.stringify(map);
     if (qs !== last.current.q) (last.current.q = qs), setQueue(rows);
     if (ss !== last.current.s) (last.current.s = ss), setSingers(map);
+    if (graded) {
+      const list: Standing[] = graded.map((g) => ({
+        queue_id: g.id,
+        singer_id: g.singer_id,
+        name: map[g.singer_id]?.name ?? '…',
+        title: g.title,
+        video_id: g.video_id,
+        votes: g.reaction_count ?? 0,
+        score: g.score == null ? null : Number(g.score),
+      }));
+      const rks = JSON.stringify(list);
+      if (rks !== last.current.rk) (last.current.rk = rks), setRanking(list);
+    }
     if (norm) {
       const sts = JSON.stringify(norm);
       if (sts !== last.current.st) (last.current.st = sts), setSettings(norm);
@@ -187,7 +213,7 @@ export function useLive({ admin = false, selfId = null, tv = false }: Options = 
     };
   }, [refresh, tv, admin]);
 
-  return { queue, singers, settings, results, loaded, refresh };
+  return { queue, singers, settings, results, ranking, loaded, refresh };
 }
 
 /** Error from an /api call; `status` is the HTTP status (missing when the network failed). */
@@ -207,11 +233,11 @@ async function send(method: string, url: string, body: unknown, headers: Record<
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new Error('Sem conexão. Tente de novo.');
+    throw new Error('Sem internet por aqui. Tenta de novo.');
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err: ApiError = new Error(data.error ?? 'Algo deu errado. Tente de novo.');
+    const err: ApiError = new Error(data.error ?? 'Ops, algo deu errado. Tenta de novo.');
     err.status = res.status;
     throw err;
   }

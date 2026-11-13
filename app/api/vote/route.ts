@@ -12,19 +12,19 @@ export async function POST(req: NextRequest) {
   const score = Number((await readBody(req)).score);
   if (!Number.isInteger(score) || score < 1 || score > 5) return fail('Nota inválida');
   const { data, error } = await db().rpc('cast_vote', { p_token_hash: hashToken(token), p_score: score });
-  if (error) return isMissingSchema(error) ? fail(NEEDS_MIGRATION, 409) : fail('Tente de novo em instantes', 503);
+  if (error) return isMissingSchema(error) ? fail(NEEDS_MIGRATION, 409) : fail('Deu uma travadinha aqui. Tenta de novo em instantes.', 503);
   const res = (data ?? {}) as { status?: string; queue_id?: number; score?: number };
   switch (res.status) {
     case 'ok':
       return json({ ok: true, queueId: res.queue_id, score: res.score });
     case 'self':
-      return fail('Você não pode votar em você mesmo.', 403);
+      return fail('Boa tentativa! Mas não vale votar em você mesmo 😄', 403);
     case 'idle':
-      return fail('A música acabou. A votação desta apresentação encerrou.', 409);
+      return fail('A música acabou, então a votação dessa já fechou.', 409);
     case 'no_contest':
-      return fail('O campeonato não está valendo agora.', 409);
+      return fail('O campeonato não tá valendo agora.', 409);
     case 'pending':
-      return fail('Aguarde o admin liberar sua entrada para votar.', 403);
+      return fail('Só um instante: o admin ainda vai liberar sua entrada pra você votar.', 403);
     case 'unknown':
       return fail('Entre com seu nome primeiro', 401);
     default:
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
   try {
     singer = await singerFromRequest(req);
   } catch {
-    return fail('Tente de novo em instantes', 503);
+    return fail('Deu uma travadinha aqui. Tenta de novo em instantes.', 503);
   }
   if (!singer) return fail('Não encontrado', 401);
   const { data: playing } = await db().from('queue').select('id').eq('status', 'playing').maybeSingle();

@@ -23,7 +23,7 @@ export default function ErrorScreen({ error, reset }: { error: Error; reset: () 
     <main className="center">
       <div className="card narrow" style={{ textAlign: 'center' }}>
         <span className="spinner big" aria-hidden="true" />
-        <p>Só um instante, voltando…</p>
+        <p>Só um instante, já voltamos…</p>
         <button className="btn" onClick={() => window.location.reload()}>
           Recarregar agora
         </button>

@@ -21,7 +21,7 @@ export default function AdminPage() {
 }
 
 function Panel({ onLogout }: { onLogout: () => void }) {
-  const { queue, singers, settings, results, loaded, refresh } = useLive({ admin: true });
+  const { queue, singers, settings, results, ranking, loaded, refresh } = useLive({ admin: true });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [minutes, setMinutes] = useState('');
@@ -82,6 +82,11 @@ function Panel({ onLogout }: { onLogout: () => void }) {
   const contest = (action: 'start' | 'end' | 'hide') => act('/api/admin/contest', { action });
   const queueAct = (body: unknown) => act('/api/admin/queue', body);
 
+  async function resetNight() {
+    if (!confirm('Zerar a noite? Sai todo mundo da fila (inclusive quem tá cantando) e o ranking da noite começa do zero.')) return;
+    if (await act('/api/night', { action: 'reset' })) setAdded('');
+  }
+
   function changeVolume(v: number) {
     setVolume(v);
     if (volTimer.current) clearTimeout(volTimer.current);
@@ -93,9 +98,9 @@ function Panel({ onLogout }: { onLogout: () => void }) {
 
   async function addForSomeone(song: SearchResult) {
     const name = addName.trim();
-    if (!name) throw new Error('Digite o nome da pessoa primeiro');
+    if (!name) throw new Error('Põe o nome da pessoa primeiro');
     await post('/api/admin/queue', { action: 'add', name, song });
-    setAdded(`${name} entrou na fila.`);
+    setAdded(`${name} tá na fila!`);
     setAddName('');
     await refresh();
   }
@@ -131,14 +136,14 @@ function Panel({ onLogout }: { onLogout: () => void }) {
       {pending.length > 0 && (
         <section className="card attention">
           <h2>
-            Aguardando aprovação <span className="count-pill">{pending.length}</span>
+            Esperando seu ok <span className="count-pill">{pending.length}</span>
           </h2>
           <ul className="rows">
             {pending.map((s) => (
               <li key={s.id}>
                 <div className="grow">
                   <strong>{s.name}</strong>
-                  <span className="muted small">{songOf(s.id)?.title ?? 'ainda sem música'}</span>
+                  <span className="muted small">{songOf(s.id)?.title ?? 'ainda escolhendo a música'}</span>
                 </div>
                 <button className="btn primary small" disabled={busy} onClick={() => act('/api/admin/singers', { id: s.id, status: 'approved' })}>
                   <Icon name="check" /> Aprovar
@@ -158,7 +163,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
       )}
 
       <section className="card">
-        <h2>Tocando agora</h2>
+        <h2>No palco agora</h2>
         {playing ? (
           <>
             <div className="nowrow">
@@ -175,7 +180,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
                 <Icon name={settings.paused ? 'play' : 'pause'} /> {settings.paused ? 'Continuar' : 'Pausar'}
               </button>
               <button className="btn" disabled={busy} onClick={() => setting({ restart: true })}>
-                <Icon name="restart" /> Reiniciar
+                <Icon name="restart" /> Do início
               </button>
               <button className="btn" disabled={busy} onClick={() => queueAct({ action: 'skip', id: playing.id })}>
                 <Icon name="skip" /> Pular
@@ -183,7 +188,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
             </div>
           </>
         ) : (
-          <p className="muted">Nada tocando.</p>
+          <p className="muted">Palco vazio por enquanto.</p>
         )}
         <label className="slider">
           <Icon name="volume" />
@@ -204,7 +209,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
         <h2>
           Fila <span className="count-pill muted-pill">{waiting.length}</span>
         </h2>
-        {waiting.length === 0 && <p className="muted">Ninguém na fila.</p>}
+        {waiting.length === 0 && <p className="muted">Ninguém na fila. Chama a galera!</p>}
         <ul className="rows">
           {waiting.map((q, i) => {
             const s = singers[q.singer_id];
@@ -213,7 +218,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
                 <span className="pos">{i + 1}</span>
                 <div className="grow">
                   <strong>
-                    {s?.name ?? '…'} {s?.status === 'pending' && <em className="tag">aguardando</em>}
+                    {s?.name ?? '…'} {s?.status === 'pending' && <em className="tag">esperando ok</em>}
                   </strong>
                   <span className="muted small">
                     {q.title} · {fmt(q.duration_sec)}
@@ -258,10 +263,44 @@ function Panel({ onLogout }: { onLogout: () => void }) {
             );
           })}
         </ul>
-        {waiting.length > 1 && (
-          <button className="btn danger small self-start" onClick={() => confirm('Limpar a fila inteira?') && queueAct({ action: 'clear' })}>
-            Limpar fila
+        <div className="row">
+          {waiting.length > 1 && (
+            <button className="btn danger small" disabled={busy} onClick={() => confirm('Tirar todo mundo que tá esperando na fila?') && queueAct({ action: 'clear' })}>
+              Limpar a fila
+            </button>
+          )}
+          <button className="btn danger small" disabled={busy} onClick={resetNight}>
+            Zerar a noite
           </button>
+        </div>
+        <span className="muted small">
+          “Zerar a noite” é pro fim do expediente: limpa a fila toda e recomeça o ranking.
+          {settings.night_reset_hour >= 0
+            ? ` Se esquecer, a limpeza automática das ${settings.night_reset_hour}h resolve.`
+            : ' A limpeza automática tá desligada (liga ali nas configurações).'}
+        </span>
+      </section>
+
+      <section className="card">
+        <h2>⭐ Ranking da noite {settings.ranking_enabled && <span className="count-pill muted-pill">ligado</span>}</h2>
+        <label className="switch">
+          <input type="checkbox" checked={settings.ranking_enabled} onChange={(e) => setting({ rankingEnabled: e.target.checked })} />
+          <span>
+            <strong>Nota no fim de cada música</strong>
+            <span className="muted small">
+              Vale a noite toda. A nota (de 5 a 10) sai das reações da galera: quanto mais gente reagir, maior. Aparece no telão quando a música acaba.
+            </span>
+          </span>
+        </label>
+        {settings.ranking_enabled && (
+          <>
+            {settings.contest_id && <p className="muted small">Pausado enquanto o campeonato tá valendo (lá o que conta são os votos).</p>}
+            {!settings.reactions_enabled && <p className="banner warn">As reações estão desligadas, então ninguém consegue dar nota. Liga elas nas configurações.</p>}
+            <Ranking rows={ranking} limit={10} highlightFirst unit="reactions" empty="Ninguém pontuou ainda nessa noite." />
+            <button className="btn self-start" disabled={busy} onClick={() => setting({ rankingOnTv: !settings.ranking_on_tv })}>
+              {settings.ranking_on_tv ? 'Tirar o ranking do telão' : 'Mostrar o ranking no telão'}
+            </button>
+          </>
         )}
       </section>
 
@@ -270,20 +309,20 @@ function Panel({ onLogout }: { onLogout: () => void }) {
         {settings.contest_id ? (
           <>
             <p className="muted small">
-              Todo mundo dá nota de 1 a 5 pelo celular enquanto cada pessoa canta. Parcial (só você vê):
+              Todo mundo dá nota de 1 a 5 pelo celular enquanto cada um canta. Parcial (só você vê):
             </p>
             <Ranking rows={standings} />
             <button
               className="btn primary"
               disabled={busy}
-              onClick={() => confirm('Encerrar o campeonato e mostrar o vencedor no telão?') && contest('end')}
+              onClick={() => confirm('Encerrar o campeonato e mostrar quem ganhou no telão?') && contest('end')}
             >
-              Encerrar e mostrar o vencedor
+              Encerrar e mostrar quem ganhou
             </button>
           </>
         ) : results ? (
           <>
-            <p className="muted small">Resultado final. Está aparecendo no telão e nos celulares.</p>
+            <p className="muted small">Resultado final. Tá aparecendo no telão e nos celulares.</p>
             <Ranking rows={results} highlightFirst />
             <div className="row">
               <button className="btn" disabled={busy} onClick={() => contest('hide')}>
@@ -297,8 +336,9 @@ function Panel({ onLogout }: { onLogout: () => void }) {
         ) : (
           <>
             <p className="muted small">
-              Ao ligar, cada cliente dá uma nota (5 carinhas) para quem está cantando. Quando você encerrar, o telão mostra
-              a classificação e o vencedor.
+              Pra concurso de verdade, por um período curto: você inicia, cada cliente dá uma nota (5 carinhas) pra quem
+              tá cantando e, quando você encerrar, o telão mostra a classificação e quem ganhou. Enquanto vale, o ranking
+              da noite fica pausado.
             </p>
             <button className="btn self-start" disabled={busy} onClick={() => contest('start')}>
               Iniciar campeonato
@@ -310,8 +350,8 @@ function Panel({ onLogout }: { onLogout: () => void }) {
       <details className="card fold">
         <summary>
           <div className="grow">
-            <h2>Colocar alguém na fila</h2>
-            <span className="muted small">Para quem está sem celular</span>
+            <h2>Pôr alguém na fila</h2>
+            <span className="muted small">Pra quem tá sem celular</span>
           </div>
         </summary>
         <label className="field">
@@ -333,23 +373,51 @@ function Panel({ onLogout }: { onLogout: () => void }) {
           <input type="checkbox" checked={settings.queue_open} onChange={(e) => setting({ queueOpen: e.target.checked })} />
           <span>
             <strong>Fila aberta</strong>
-            <span className="muted small">Desligue no fim da noite para ninguém mais entrar.</span>
+            <span className="muted small">Desliga no fim da noite pra ninguém mais entrar.</span>
           </span>
         </label>
         <label className="switch">
           <input type="checkbox" checked={settings.require_approval} onChange={(e) => setting({ requireApproval: e.target.checked })} />
           <span>
-            <strong>Aprovar pessoas novas</strong>
-            <span className="muted small">Quem já foi aprovado uma vez não precisa de novo.</span>
+            <strong>Aprovar gente nova</strong>
+            <span className="muted small">Quem você já aprovou uma vez não precisa de novo.</span>
           </span>
         </label>
         <label className="switch">
           <input type="checkbox" checked={settings.reactions_enabled} onChange={(e) => setting({ reactionsEnabled: e.target.checked })} />
           <span>
             <strong>Reações no telão</strong>
-            <span className="muted small">Palmas, coração, fogo e choro enviados pelo celular.</span>
+            <span className="muted small">Palmas, coração, fogo e choro mandados pelo celular. É delas que sai a nota do ranking.</span>
           </span>
         </label>
+        <label className="switch">
+          <input type="checkbox" checked={settings.gifs_enabled} onChange={(e) => setting({ gifsEnabled: e.target.checked })} />
+          <span>
+            <strong>GIFs e figurinhas no telão</strong>
+            <span className="muted small">A galera manda pelo celular e aparece num cantinho do vídeo. Um por pessoa a cada 12 segundos.</span>
+          </span>
+        </label>
+        <div className="field">
+          <span>Limpeza automática da fila (pra não sobrar pedido da noite passada)</span>
+          <select
+            className="select"
+            aria-label="Limpeza automática da fila"
+            value={settings.night_reset_hour}
+            disabled={busy}
+            onChange={(e) => setting({ nightResetHour: Number(e.target.value) })}
+          >
+            <option value={-1}>Desligada</option>
+            {[4, 6, 8, 10, 12, 14, 16].map((h) => (
+              <option key={h} value={h}>
+                Todo dia às {h}h
+              </option>
+            ))}
+            {![-1, 4, 6, 8, 10, 12, 14, 16].includes(settings.night_reset_hour) && (
+              <option value={settings.night_reset_hour}>Todo dia às {settings.night_reset_hour}h</option>
+            )}
+          </select>
+          <span className="small">Só limpa se ninguém cantou nos últimos 45 minutos, então nunca corta a festa no meio.</span>
+        </div>
         <div className="field">
           <span>Duração máxima da música (minutos)</span>
           <div className="row">
@@ -360,7 +428,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
           </div>
         </div>
         <div className="field">
-          <span>Tempo de “próximo cantor” no telão (segundos)</span>
+          <span>Contagem de “agora é com você” no telão (segundos)</span>
           <div className="row">
             <input type="number" inputMode="numeric" min={0} max={30} step={1} value={gap} onChange={(e) => setGap(e.target.value)} />
             <button className="btn" disabled={busy || gap === ''} onClick={() => setting({ intermissionSec: Number(gap) })}>

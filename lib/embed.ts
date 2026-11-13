@@ -36,4 +36,4 @@ export async function canEmbed(videoId: string): Promise<boolean> {
   }
 }
 
-export const NOT_EMBEDDABLE = 'Este vídeo não pode ser tocado no telão. Escolha outra versão da música.';
+export const NOT_EMBEDDABLE = 'Esse vídeo não deixa tocar no telão. Escolhe outra versão da música!';

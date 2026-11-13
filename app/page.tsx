@@ -6,7 +6,7 @@ import { useAdmin } from '@/lib/useAdmin';
 import Icon from '@/components/Icon';
 import { post, useLive, type ApiError } from '@/lib/useLive';
 import { browserClient } from '@/lib/supabase-browser';
-import { fmtScore, REACTIONS, type QueueItem, type Settings } from '@/lib/types';
+import { fmtScore, isGifUrl, REACTIONS, scorePhrase, STICKERS, type QueueItem, type Settings } from '@/lib/types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
@@ -71,8 +71,26 @@ function writeProgress(p: { id: number; t: number } | null) {
   } catch {}
 }
 
-/** The video waits while the admin paused it or while contest results are on screen. */
-const onHold = (s: Settings | null) => !!s && (s.paused || s.results_contest_id != null);
+/** The video waits while the admin paused it or while a ranking (contest or night) is on screen. */
+const onHold = (s: Settings | null) => !!s && (s.paused || s.results_contest_id != null || (s.ranking_on_tv && s.ranking_enabled));
+
+// Video options on the projector (the small gear next to pause / skip).
+const RATES = [0.75, 1, 1.25] as const;
+const QUALITY_LABELS: Record<string, string> = {
+  tiny: '144p', small: '240p', medium: '360p', large: '480p', hd720: '720p', hd1080: '1080p', hd1440: '1440p', hd2160: '4K', highres: '4K+',
+};
+const CC_KEY = 'karaoke_cc';
+const NIGHT_CHECK_EVERY = 10 * 60 * 1000;
+const NIGHT_GATE_MAX = 5000; // never hold the karaoke longer than this waiting for the night check
+const SCORE_CARD_MS = 7000;
+const GIF_MS = 7000;
+
+interface TvGif {
+  id: number;
+  kind: 'gif' | 'sticker';
+  ref: string;
+  name: string;
+}
 
 const isOnline = () => typeof navigator === 'undefined' || navigator.onLine !== false;
 
@@ -123,7 +141,7 @@ export default function TvPage() {
 }
 
 function Tv({ onLogout }: { onLogout: () => void }) {
-  const { queue, singers, settings, results, loaded, refresh } = useLive({ tv: true });
+  const { queue, singers, settings, results, ranking, loaded, refresh } = useLive({ tv: true });
   const [started, setStarted] = useState(startedOnce);
   const [muted, setMuted] = useState(false); // playing without sound: waiting for a click
   const [showSettings, setShowSettings] = useState(false);
@@ -131,6 +149,24 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const [intro, setIntro] = useState<{ id: number; left: number } | null>(null);
   const [notice, setNotice] = useState('');
   const [floaters, setFloaters] = useState<{ id: number; emoji: string; x: number; size: number; dur: number }[]>([]);
+  // last night's leftovers are cleaned before the first song of the day is allowed to start
+  const [nightReady, setNightReady] = useState(false);
+  const nightReadyRef = useRef(false);
+  const [scoreCard, setScoreCard] = useState<{ queueId: number; name: string; title: string; score: number } | null>(null);
+  const [gif, setGif] = useState<TvGif | null>(null);
+  // video options (gear)
+  const [videoMenu, setVideoMenu] = useState(false);
+  const [rate, setRate] = useState(1);
+  const [cc, setCc] = useState(false);
+  const [ytControls, setYtControls] = useState(false); // YouTube's own controls, to pick the quality by hand
+  const [quality, setQuality] = useState('');
+  const rateRef = useRef(1);
+  rateRef.current = rate;
+  const ccRef = useRef(false);
+  ccRef.current = cc;
+  const ytControlsRef = useRef(false);
+  ytControlsRef.current = ytControls;
+  const ccAppliedTo = useRef<number | null>(null);
 
   const holderRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
@@ -151,6 +187,9 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     setOrigin(window.location.origin);
     if (wasStarted()) setStarted(true);
+    try {
+      if (localStorage.getItem(CC_KEY) === '1') setCc(true);
+    } catch {}
   }, []);
 
   /** The browser blocked sound: play muted and ask for a click. */
@@ -230,7 +269,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
 
   // Small controls on the projector itself (same effect as the buttons on the admin phone).
   const [ctrlBusy, setCtrlBusy] = useState(false);
-  async function control(body: { paused: boolean } | { restart: true }) {
+  async function control(body: { paused: boolean } | { restart: true } | { rankingOnTv: boolean }) {
     if (ctrlBusy) return;
     setCtrlBusy(true);
     try {
@@ -283,9 +322,36 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     p.loadVideoById({ videoId: cur.video_id, startSeconds: h.lastTime > 3 ? Math.floor(h.lastTime) : 0 });
   }
 
+  /**
+   * Captions on/off. Not part of YouTube's documented API, so everything is optional and guarded:
+   * if it does nothing, the video simply plays as before.
+   */
+  function applyCaptions(on: boolean, announce = false) {
+    const p = playerRef.current;
+    if (!p) return;
+    try {
+      if (!on) {
+        p.unloadModule?.('captions');
+        return;
+      }
+      p.loadModule?.('captions');
+      setTimeout(() => {
+        try {
+          const list: { languageCode?: string }[] = playerRef.current?.getOption?.('captions', 'tracklist') ?? [];
+          if (!list.length) {
+            if (announce) flash('Esse vídeo não tem legenda pra ligar.');
+            return;
+          }
+          const pick = list.find((t) => String(t.languageCode ?? '').startsWith('pt')) ?? list[0];
+          playerRef.current?.setOption?.('captions', 'track', { languageCode: pick.languageCode });
+        } catch {}
+      }, 1500);
+    } catch {}
+  }
+
   function syncPlayer() {
     const p = playerRef.current;
-    if (!p || !playerReady.current) return;
+    if (!p || !playerReady.current || !nightReadyRef.current) return;
     const cur = playingRef.current;
     if (!cur) {
       if (loadedVideo.current !== null) {
@@ -347,7 +413,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         playerRef.current = new YT.Player(el, {
           width: '100%',
           height: '100%',
-          playerVars: { autoplay: 1, controls: 0, rel: 0, modestbranding: 1, playsinline: 1, iv_load_policy: 3, fs: 0, disablekb: 1 },
+          playerVars: { autoplay: 1, controls: ytControlsRef.current ? 1 : 0, rel: 0, modestbranding: 1, playsinline: 1, iv_load_policy: 3, fs: 0, disablekb: 1 },
           events: {
             onReady: () => {
               if (cancelled) return;
@@ -359,6 +425,16 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             onStateChange: (e: any) => {
               // admin paused from the phone while the video was still loading
               if (e.data === YT.PlayerState.PLAYING && onHold(settingsRef.current)) playerRef.current?.pauseVideo?.();
+              if (e.data === YT.PlayerState.PLAYING) {
+                // loading a video puts the speed back to normal: apply the chosen one again
+                try {
+                  if (rateRef.current !== 1) playerRef.current?.setPlaybackRate?.(rateRef.current);
+                } catch {}
+                if (ccRef.current && ccAppliedTo.current !== loadedVideo.current) {
+                  ccAppliedTo.current = loadedVideo.current;
+                  applyCaptions(true);
+                }
+              }
               if (e.data === YT.PlayerState.ENDED && videoStarted.current && loadedVideo.current != null) {
                 writeProgress(null);
                 void advance('done', loadedVideo.current);
@@ -374,7 +450,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
               // Anything else (5 = player hiccup) gets one more chance first.
               const fatal = [2, 100, 101, 150].includes(Number(e?.data));
               if (!fatal && h.errors <= 1) return void setTimeout(reloadVideo, 1500);
-              flash('Este vídeo não pôde ser tocado. Passando para o próximo.');
+              flash('Esse vídeo não quis tocar. Vamos pro próximo!');
               writeProgress(null);
               void advance('skipped', loadedVideo.current);
             },
@@ -386,7 +462,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       // the player frame did not load (internet down?): throw it away and build another
       readyTimer = setTimeout(() => {
         if (cancelled || playerReady.current) return;
-        flash('Conectando ao YouTube… Confira a internet do computador.', true);
+        flash('Conectando no YouTube… Dá uma olhada na internet do computador.', true);
         build(YT);
       }, PLAYER_READY_TIMEOUT);
     };
@@ -408,16 +484,131 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       videoStarted.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started]);
+  }, [started, ytControls]);
+
+  // When the projector opens (and every few minutes while it is on): if the bar closed and opened
+  // again, the queue of the night before is cleaned. Nothing starts playing before the first check
+  // answers, but a slow or failed check never holds the karaoke for more than a few seconds.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  useEffect(() => {
+    let stop = false;
+    const open = () => {
+      if (stop || nightReadyRef.current) return;
+      nightReadyRef.current = true;
+      setNightReady(true);
+    };
+    const check = async () => {
+      try {
+        const d = await post('/api/night', { action: 'auto' });
+        if (d?.result === 'reset') await refreshRef.current();
+      } catch {}
+      open();
+    };
+    const gate = setTimeout(open, NIGHT_GATE_MAX);
+    void check();
+    const every = setInterval(() => void check(), NIGHT_CHECK_EVERY);
+    return () => {
+      stop = true;
+      clearTimeout(gate);
+      clearInterval(every);
+    };
+  }, []);
 
   // react to queue changes
   useEffect(() => {
-    if (!started || !loaded) return;
+    if (!started || !loaded || !nightReady) return;
     if (pending.current && pending.current.id !== playing?.id) pending.current = null;
     syncPlayer();
     if (!playing && waiting.length > 0) void advance('done', null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started, loaded, playing?.id, waiting.length]);
+  }, [started, loaded, nightReady, playing?.id, waiting.length]);
+
+  // Night ranking: when a song ends, the database grades it from the reactions it got. Show the
+  // grade for a few seconds (it sits on top of the "next singer" countdown).
+  const lastSinger = useRef<{ id: number; name: string; title: string } | null>(null);
+  const scoreTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const prev = lastSinger.current;
+    lastSinger.current = playing ? { id: playing.id, name: singers[playing.singer_id]?.name ?? '', title: playing.title } : null;
+    if (!prev || prev.id === playing?.id) return;
+    // a new song always starts at normal speed and with YouTube's own controls put away
+    setRate(1);
+    setYtControls(false);
+    setVideoMenu(false);
+    const s = settingsRef.current;
+    if (!s?.ranking_enabled || s.contest_id) return;
+    const t = setTimeout(async () => {
+      try {
+        const { data } = await browserClient().from('queue').select('id, score').eq('id', prev.id).maybeSingle();
+        const score = data && !Array.isArray(data) ? Number((data as { score?: number | null }).score) : NaN;
+        if ((data as { score?: number | null } | null)?.score == null || !Number.isFinite(score)) return;
+        setScoreCard({ queueId: prev.id, name: prev.name, title: prev.title, score });
+        if (scoreTimer.current) clearTimeout(scoreTimer.current);
+        scoreTimer.current = setTimeout(() => setScoreCard(null), SCORE_CARD_MS);
+      } catch {}
+    }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing?.id]);
+  useEffect(() => () => void (scoreTimer.current && clearTimeout(scoreTimer.current)), []);
+
+  // GIFs and stickers sent from the phones: one at a time, in a corner of the video
+  const gifsOn = !!settings?.gifs_enabled;
+  useEffect(() => {
+    if (!gifsOn) return;
+    const sb = browserClient();
+    const line: TvGif[] = [];
+    let showing = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const next = () => {
+      const g = line.shift();
+      showing = !!g;
+      setGif(g ?? null);
+      if (g) timer = setTimeout(next, GIF_MS);
+    };
+    const ch = sb
+      .channel('karaoke-gifs')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tv_gifs' }, (payload) => {
+        const r = payload.new as { id?: number; kind?: string; ref?: string; name?: string };
+        const ref = String(r.ref ?? '');
+        const ok = r.kind === 'gif' ? isGifUrl(ref) : r.kind === 'sticker' && STICKERS.some((s) => s.key === ref);
+        // a burst never piles up: at most 4 waiting
+        if (!ok || line.length >= 4) return;
+        line.push({ id: Number(r.id) || Date.now(), kind: r.kind as 'gif' | 'sticker', ref, name: String(r.name ?? '').slice(0, 40) });
+        if (!showing) next();
+      })
+      .subscribe();
+    return () => {
+      sb.removeChannel(ch).catch(() => {});
+      if (timer) clearTimeout(timer);
+      setGif(null);
+    };
+  }, [gifsOn]);
+
+  // video options: speed
+  useEffect(() => {
+    try {
+      if (playerReady.current && videoStarted.current) playerRef.current?.setPlaybackRate?.(rate);
+    } catch {}
+  }, [rate]);
+
+  function toggleCaptions() {
+    const on = !cc;
+    setCc(on);
+    try {
+      localStorage.setItem(CC_KEY, on ? '1' : '0');
+    } catch {}
+    ccAppliedTo.current = on ? loadedVideo.current : null;
+    applyCaptions(on, true);
+  }
+
+  function openVideoMenu() {
+    try {
+      setQuality(String(playerRef.current?.getPlaybackQuality?.() ?? ''));
+    } catch {}
+    setVideoMenu((v) => !v);
+  }
 
   // remote control from the admin phone: pause / resume. Contest results on screen also hold the video.
   const hold = onHold(settings);
@@ -484,7 +675,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     if (!started) return;
     const t = setInterval(() => {
-      if (!loadedRef.current) return;
+      if (!loadedRef.current || !nightReadyRef.current) return;
       const cur = playingRef.current;
 
       // the server never confirmed the end of this song: ask again
@@ -541,10 +732,10 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         h.reloads = 0;
         if (deadSkips.current >= MAX_DEAD_SKIPS) {
           // several in a row: the problem is the connection, not the songs. Keep trying this one.
-          flash('O vídeo não está carregando. Confira a internet do computador.', true);
+          flash('O vídeo não tá carregando. Dá uma olhada na internet do computador.', true);
           return reloadVideo();
         }
-        flash('Este vídeo não carregou. Passando para o próximo.');
+        flash('Esse vídeo não carregou. Vamos pro próximo!');
         void advance('skipped', cur.id, false).then((ok) => {
           if (ok) deadSkips.current += 1;
           else reloadVideo(); // server unreachable too: it is the internet, give the song another chance
@@ -592,11 +783,15 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const showVideo = !!playing && !intro;
   const winner = results?.[0]?.score != null ? results[0] : null;
   const SHOWN = 8;
+  const rankingOn = !!settings?.ranking_enabled;
+  const showRanking = rankingOn && !!settings?.ranking_on_tv && !results;
+  const scorePos = scoreCard ? ranking.findIndex((r) => r.queue_id === scoreCard.queueId) : -1;
+  const sticker = gif?.kind === 'sticker' ? STICKERS.find((x) => x.key === gif.ref) : null;
 
   return (
     <main className="tv">
       <section className="stage">
-        <div className={showVideo ? 'player-wrap' : 'player-wrap hidden'}>
+        <div className={`player-wrap${showVideo ? '' : ' hidden'}${ytControls ? ' interactive' : ''}`}>
           <div className="yt-holder" ref={holderRef} />
         </div>
 
@@ -604,15 +799,15 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           <div className="idle">
             <div className="idle-text">
               <span className="eyebrow">🍄 Karaokê Cogumelo</span>
-              <h1>{open ? 'Quem canta agora?' : 'Por hoje é só!'}</h1>
+              <h1>{open ? 'Quem vai soltar a voz?' : 'Por hoje é só, pessoal!'}</h1>
               {open ? (
                 <ol className="steps">
-                  <li>Aponte a câmera do celular para o QR code</li>
-                  <li>Digite seu nome</li>
-                  <li>Escolha a música e espere sua vez</li>
+                  <li>Aponta a câmera do celular pro QR code</li>
+                  <li>Diz como a gente te chama</li>
+                  <li>Escolhe a música e espera a sua vez</li>
                 </ol>
               ) : (
-                <p>A fila está fechada. Obrigado por cantar com a gente!</p>
+                <p>A fila fechou. Valeu por cantar com a gente, até a próxima!</p>
               )}
             </div>
             {open && singUrl && (
@@ -625,7 +820,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
 
         {playing && intro && (
           <div className="intro">
-            <span className="eyebrow">Agora é a vez de</span>
+            <span className="eyebrow">Agora é com você</span>
             <h1>{nowName}</h1>
             <p>{playing.title}</p>
             <span className="count" key={intro.left}>
@@ -634,7 +829,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           </div>
         )}
 
-        {showVideo && settings?.paused && !results && <div className="badge-paused">Pausado</div>}
+        {showVideo && settings?.paused && !results && !showRanking && <div className="badge-paused">Pausado</div>}
 
         {floaters.length > 0 && (
           <div className="floaters" aria-hidden="true">
@@ -643,6 +838,66 @@ function Tv({ onLogout }: { onLogout: () => void }) {
                 {f.emoji}
               </span>
             ))}
+          </div>
+        )}
+
+        {gif && !results && !showRanking && (
+          <div className="gif-pop" key={gif.id}>
+            {gif.kind === 'gif' ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={gif.ref} alt="" onError={() => setGif(null)} />
+            ) : (
+              sticker && (
+                <div className={`sticker s-${sticker.key}`}>
+                  <span>{sticker.emoji}</span>
+                  <strong>{sticker.text}</strong>
+                </div>
+              )
+            )}
+            {gif.name && <small>{gif.name} mandou</small>}
+          </div>
+        )}
+
+        {scoreCard && !results && !showRanking && (
+          <div className="score-card">
+            <span className="eyebrow">Nota da galera</span>
+            <h1>{fmtScore(scoreCard.score)}</h1>
+            <strong>{scoreCard.name}</strong>
+            <p>
+              {scorePhrase(scoreCard.score)}
+              {scorePos >= 0 && ` · ${scorePos + 1}º lugar na noite`}
+            </p>
+          </div>
+        )}
+
+        {showRanking && (
+          <div className="results-screen">
+            <span className="eyebrow">⭐ Ranking da noite</span>
+            {ranking.length === 0 ? (
+              <h1 className="smaller">Ninguém pontuou ainda. Bora cantar!</h1>
+            ) : (
+              <>
+                <h1>{ranking[0].name}</h1>
+                <p>
+                  {ranking[0].title} · nota {fmtScore(ranking[0].score)}
+                </p>
+                {ranking.length > 1 && (
+                  <ol>
+                    {ranking.slice(1, 8).map((r, i) => (
+                      <li key={r.queue_id}>
+                        <span className="pos">{i + 2}</span>
+                        <strong>{r.name}</strong>
+                        <span className="song">{r.title}</span>
+                        <span className="pts">{fmtScore(r.score)}</span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </>
+            )}
+            <button className="btn small results-close" disabled={ctrlBusy} onClick={() => control({ rankingOnTv: false })}>
+              Fechar o ranking
+            </button>
           </div>
         )}
 
@@ -657,7 +912,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
                 </p>
               </>
             ) : (
-              <h1 className="smaller">Sem votos desta vez</h1>
+              <h1 className="smaller">Ninguém votou dessa vez</h1>
             )}
             {results.length > 1 && (
               <ol>
@@ -673,8 +928,43 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             )}
           </div>
         )}
-        {started && playing && !results && (
-          <div className="tv-controls">
+        {started && playing && !results && !showRanking && videoMenu && (
+          <div className={`video-menu${ytControls ? ' raised' : ''}`} role="dialog" aria-label="Opções do vídeo">
+            <div className="vm-row">
+              <span>Velocidade</span>
+              <div className="vm-opts">
+                {RATES.map((r) => (
+                  <button key={r} className={rate === r ? 'on' : ''} aria-pressed={rate === r} onClick={() => setRate(r)}>
+                    {r === 1 ? 'Normal' : `${String(r).replace('.', ',')}×`}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="vm-row">
+              <span>Legenda</span>
+              <div className="vm-opts">
+                <button className={cc ? 'on' : ''} aria-pressed={cc} onClick={toggleCaptions}>
+                  {cc ? 'Ligada' : 'Desligada'}
+                </button>
+              </div>
+            </div>
+            <div className="vm-row">
+              <span>Qualidade{quality && QUALITY_LABELS[quality] ? ` · agora ${QUALITY_LABELS[quality]}` : ''}</span>
+              <div className="vm-opts">
+                <button className={ytControls ? 'on' : ''} aria-pressed={ytControls} onClick={() => setYtControls((v) => !v)}>
+                  {ytControls ? 'Esconder controles do YouTube' : 'Escolher no YouTube'}
+                </button>
+              </div>
+            </div>
+            <small>
+              {ytControls
+                ? 'Clique na engrenagem do próprio YouTube, dentro do vídeo, e escolha a qualidade. Os controles somem sozinhos na próxima música.'
+                : 'O YouTube escolhe a qualidade sozinho pela internet. Pra mudar na mão, use “Escolher no YouTube” (o vídeo dá uma piscada e volta no mesmo ponto).'}
+            </small>
+          </div>
+        )}
+        {started && playing && !results && !showRanking && (
+          <div className={`tv-controls${ytControls ? ' raised' : ''}${videoMenu ? ' open' : ''}`}>
             <button
               aria-label={settings?.paused ? 'Continuar' : 'Pausar'}
               title={settings?.paused ? 'Continuar' : 'Pausar'}
@@ -689,13 +979,16 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             <button aria-label="Pular para a próxima" title="Pular para a próxima" onClick={skipNow}>
               <Icon name="skip" size={18} />
             </button>
+            <button aria-label="Opções do vídeo" title="Opções do vídeo" aria-expanded={videoMenu} onClick={openVideoMenu}>
+              <Icon name="gear" size={18} />
+            </button>
           </div>
         )}
         {notice && <div className="toast">{notice}</div>}
 
         {started && muted && (
           <button className="sound-overlay" onClick={unmute}>
-            <span>🔇 Clique na tela para ligar o som</span>
+            <span>🔇 Clique na tela pra ligar o som</span>
           </button>
         )}
 
@@ -704,15 +997,15 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             <span className="start-btn">
               <Icon name="play" size={40} />
             </span>
-            Clique para iniciar o karaokê
-            <small>Necessário para o navegador liberar o som</small>
+            Clique pra começar o karaokê
+            <small>Um clique só, pro navegador liberar o som</small>
           </button>
         )}
       </section>
 
       <aside className="side">
         <div className="now">
-          <span className="label">Cantando agora</span>
+          <span className="label">No palco agora</span>
           <strong>{playing ? nowName : '—'}</strong>
           {playing && <span className="song">{playing.title}</span>}
         </div>
@@ -720,7 +1013,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         <div className="list">
           <span className="label">Próximos {waiting.length > 0 && `· ${waiting.length}`}</span>
           {waiting.length === 0 ? (
-            <p className="muted">{open ? 'Fila vazia. Bora cantar?' : 'Fila encerrada.'}</p>
+            <p className="muted">{open ? 'Fila vazia. Bora cantar?' : 'A fila fechou por hoje.'}</p>
           ) : (
             <ol>
               {waiting.slice(0, SHOWN).map((q, i) => (
@@ -740,7 +1033,15 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         {settings?.contest_id && (
           <div className="tv-message contest-on">
             🏆 Campeonato valendo!
-            <small>Dê sua nota pelo celular enquanto cada pessoa canta.</small>
+            <small>Dá sua nota pelo celular enquanto cada um canta.</small>
+          </div>
+        )}
+        {rankingOn && !settings?.contest_id && ranking.length > 0 && (
+          <div className="tv-message ranking-on">
+            ⭐ Líder da noite: {ranking[0].name}
+            <small>
+              Nota {fmtScore(ranking[0].score)}. Reaja pelo celular pra dar nota em quem canta!
+            </small>
           </div>
         )}
         {settings?.tv_message && <div className="tv-message">{settings.tv_message}</div>}
@@ -752,13 +1053,13 @@ function Tv({ onLogout }: { onLogout: () => void }) {
                 <QRCode value={singUrl} size={140} />
               </div>
               <span>
-                Escaneie
+                Escaneia
                 <br />
-                para cantar
+                e vem cantar
               </span>
             </>
           ) : (
-            <span className="muted">Fila fechada por hoje</span>
+            <span className="muted">A fila fechou por hoje</span>
           )}
         </div>
 
@@ -766,7 +1067,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           <Icon name="gear" size={16} />
         </button>
         {pendingCount > 0 && (
-          <span className="pending-dot" title="Pessoas aguardando aprovação">
+          <span className="pending-dot" title="Gente esperando aprovação">
             {pendingCount}
           </span>
         )}
@@ -776,7 +1077,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         <div className="modal" onClick={() => setShowSettings(false)}>
           <div className="card" onClick={(e) => e.stopPropagation()}>
             <h2>Painel do admin</h2>
-            <p className="muted">Escaneie com o celular do admin para abrir o painel.</p>
+            <p className="muted">Aponta o celular do admin aqui pra abrir o painel.</p>
             {adminUrl && (
               <div className="qr">
                 <QRCode value={adminUrl} size={220} />

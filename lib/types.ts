@@ -19,6 +19,9 @@ export interface QueueItem {
   position: number;
   created_at: string;
   started_at: string | null;
+  /** nota do ranking da noite (5,0 a 10,0), calculada pelo banco quando a música termina */
+  score?: number | null;
+  reaction_count?: number | null;
 }
 
 export interface Settings {
@@ -40,6 +43,16 @@ export interface Settings {
   /** campeonato encerrado cujo resultado está no telão */
   results_contest_id: number | null;
   reactions_enabled: boolean;
+  /** ranking da noite: nota no fim de cada música, pelas reações */
+  ranking_enabled: boolean;
+  /** ranking da noite aberto no telão */
+  ranking_on_tv: boolean;
+  /** GIFs e figurinhas enviados pelo celular */
+  gifs_enabled: boolean;
+  /** quando a noite atual começou (null = banco ainda sem a atualização) */
+  night_started_at: string | null;
+  /** hora (Brasília) da limpeza automática da fila; -1 = desligada */
+  night_reset_hour: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -56,6 +69,11 @@ export const DEFAULT_SETTINGS: Settings = {
   results_contest_id: null,
   // off until the database says otherwise, so the buttons stay hidden if the columns are missing
   reactions_enabled: false,
+  ranking_enabled: false,
+  ranking_on_tv: false,
+  gifs_enabled: false,
+  night_started_at: null,
+  night_reset_hour: -1,
 };
 
 /** Fills in defaults, so the app keeps working even if the database is missing newer columns. */
@@ -80,7 +98,10 @@ export interface PopularSong extends SearchResult {
   count: number;
 }
 
-/** One performance in a contest ranking (best first). `score` is the average of the 1-5 votes. */
+/**
+ * One performance in a ranking (best first). Contest: `score` is the average of the 1-5 votes.
+ * Night ranking: `score` is the 5-10 grade from the reactions and `votes` is how many reactions.
+ */
 export interface Standing {
   queue_id: number;
   name: string;
@@ -88,6 +109,8 @@ export interface Standing {
   video_id: string;
   votes: number;
   score: number | null;
+  /** only in the night ranking: who sang */
+  singer_id?: string;
 }
 
 export const REACTIONS = [
@@ -103,3 +126,42 @@ export const SCORE_EMOJIS = ['😬', '😐', '🙂', '😄', '🤩'] as const;
 export const SCORE_LABELS = ['Desafinou', 'Mais ou menos', 'Legal', 'Muito bom', 'Arrasou'] as const;
 
 export const fmtScore = (n: number | null) => (n == null ? '–' : n.toFixed(1).replace('.', ','));
+
+/** Built-in animated stickers a customer can send to the projector (no outside service needed). */
+export const STICKERS = [
+  { key: 'arrasou', emoji: '🤩', text: 'Arrasou!' },
+  { key: 'bis', emoji: '🔁', text: 'Bis! Bis!' },
+  { key: 'solta', emoji: '🎤', text: 'Solta a voz!' },
+  { key: 'lenda', emoji: '👑', text: 'Lenda!' },
+  { key: 'chorei', emoji: '😭', text: 'Chorei' },
+  { key: 'desafinou', emoji: '🙉', text: 'Desafinou!' },
+  { key: 'brinde', emoji: '🍻', text: 'Um brinde!' },
+  { key: 'cogumelo', emoji: '🍄', text: 'Cogumelo!' },
+] as const;
+
+/** A GIF found in the search, as the phone sees it. */
+export interface GifResult {
+  id: string;
+  preview: string;
+  title: string;
+}
+
+/** GIFs only ever come from GIPHY's image servers. Checked on the server and again on the projector. */
+export function isGifUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && /^(media\d*|i)\.giphy\.com$/.test(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** A short cheer for a night-ranking grade. */
+export function scorePhrase(score: number): string {
+  if (score >= 9.5) return 'Lenda do karaokê!';
+  if (score >= 8.5) return 'Arrasou demais!';
+  if (score >= 7.5) return 'Mandou muito bem!';
+  if (score >= 6.5) return 'Mandou bem!';
+  if (score >= 5.5) return 'Valeu a coragem!';
+  return 'A plateia tava tímida…';
+}

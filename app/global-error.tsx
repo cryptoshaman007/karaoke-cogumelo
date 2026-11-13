@@ -11,7 +11,7 @@ export default function GlobalError({ error }: { error: Error }) {
   return (
     <html lang="pt-BR">
       <body style={{ background: '#0b0b0f', color: '#f4f4f7', fontFamily: 'system-ui, sans-serif', display: 'grid', placeItems: 'center', minHeight: '100vh', margin: 0 }}>
-        <p>Só um instante, voltando…</p>
+        <p>Só um instante, já voltamos…</p>
       </body>
     </html>
   );
