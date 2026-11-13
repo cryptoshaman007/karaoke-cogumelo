@@ -347,8 +347,8 @@ input[type=search]::-webkit-search-cancel-button { display: none; }
 
 /* ---------- selfies ---------- */
 .avatar { flex: none; border-radius: 50%; object-fit: cover; background: var(--panel-2); border: 2px solid var(--line); }
-.avatar.fun { display: inline-grid; place-items: center; overflow: hidden; container-type: size; user-select: none; }
-.avatar.fun > span { font-size: 60cqw; line-height: 1; }
+.avatar.fun { display: inline-grid; place-items: center; overflow: hidden; user-select: none; }
+.avatar.fun > span { line-height: 1; }
 .avatar.ring { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(167, 139, 250, .18); }
 .with-avatar { display: flex; align-items: center; gap: .6rem; min-width: 0; }
 .card.selfie-card { flex-direction: row; align-items: flex-start; gap: .9rem; }

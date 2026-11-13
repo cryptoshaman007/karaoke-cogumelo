@@ -4,7 +4,8 @@ import { useState } from 'react';
 
 // Who has no selfie gets a little drawing instead, so the projector never shows an empty circle.
 // The drawing comes from the person's id: always the same one for the same person, all night.
-const FACES = ['🐸', '🐱', '🐶', '🦊', '🐼', '🐨', '🐯', '🦁', '🐷', '🐵', '🐙', '🦄', '🐔', '🐧', '🐰', '🐻', '🐹', '🦖', '🐳', '🦉', '🐮', '🐢', '🦥', '🦦', '🐝', '🦩', '🐲', '👽', '👻', '🤖'];
+// Only emojis that old phones also draw (no newer animals that show up as an empty box).
+const FACES = ['🐸', '🐱', '🐶', '🦊', '🐼', '🐨', '🐯', '🦁', '🐷', '🐵', '🐙', '🦄', '🐔', '🐧', '🐰', '🐻', '🐹', '🦖', '🐳', '🦉', '🐮', '🐢', '🐞', '🐬', '🐝', '🐠', '🐲', '👽', '👻', '🤖'];
 
 function pick(seed: string) {
   let h = 0;
@@ -25,7 +26,7 @@ export default function Avatar({ src, size = 40, className = '', seed }: { src: 
       <span
         className={`avatar fun ${className}`.trim()}
         aria-hidden="true"
-        style={{ width: size, height: size, background: `hsl(${hue} 55% 28%)` }}
+        style={{ width: size, height: size, fontSize: Math.round(size * 0.6), background: `hsl(${hue} 55% 28%)` }}
       >
         <span>{face}</span>
       </span>

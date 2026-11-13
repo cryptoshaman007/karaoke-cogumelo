@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import AdminLogin from '@/components/AdminLogin';
 import { useAdmin } from '@/lib/useAdmin';
 import Icon from '@/components/Icon';
@@ -7,7 +7,7 @@ import Avatar from '@/components/Avatar';
 import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
 import { fmt, get, post, useLive, type ApiError } from '@/lib/useLive';
-import { photoUrl, type SearchResult, type Standing } from '@/lib/types';
+import { photoUrl, type SearchResult, type Singer, type Standing } from '@/lib/types';
 import { KARAOKE_RE } from '@/lib/song';
 
 const nameKey = (n: string) => n.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
@@ -36,6 +36,18 @@ function Panel({ onLogout }: { onLogout: () => void }) {
   const [added, setAdded] = useState('');
   const [standings, setStandings] = useState<Standing[]>([]);
   const filled = useRef(false);
+  // people refused on earlier nights (the live data only brings the last 24 hours)
+  const [oldBlocked, setOldBlocked] = useState<Singer[]>([]);
+  const loadBlocked = useCallback(() => {
+    get('/api/admin/singers')
+      .then((d) => setOldBlocked(Array.isArray(d?.singers) ? d.singers : []))
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    loadBlocked();
+    const t = setInterval(loadBlocked, 60000);
+    return () => clearInterval(t);
+  }, [loadBlocked]);
   const volTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // fill the form once with what is saved
@@ -72,6 +84,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
     try {
       await post(url, body);
       await refresh();
+      if (url === '/api/admin/singers') loadBlocked();
       return true;
     } catch (e) {
       const msg = (e as Error).message;
@@ -120,7 +133,10 @@ function Panel({ onLogout }: { onLogout: () => void }) {
   const waiting = queue.filter((q) => q.status === 'waiting');
   const all = Object.values(singers);
   const pending = all.filter((s) => s.status === 'pending');
-  const blocked = all.filter((s) => s.status === 'blocked');
+  const blocked = [
+    ...all.filter((s) => s.status === 'blocked'),
+    ...oldBlocked.filter((s) => !singers[s.id]),
+  ].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   const withPhoto = settings.photos_enabled ? all.filter((s) => s.status !== 'blocked' && s.photo_at) : [];
   const songOf = (singerId: string) => waiting.find((q) => q.singer_id === singerId);
   // a name already used tonight by someone else: maybe the same person on another phone (or a refused one back)
@@ -139,7 +155,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
   }
   function refuseAll() {
     if (!confirm(`Recusar as ${pending.length} pessoas que estão esperando ok? Use quando entrar um monte de nome falso.`)) return;
-    void act('/api/admin/singers', { action: 'refuseAllPending' });
+    void act('/api/admin/singers', { action: 'refuseAllPending', ids: pending.map((s) => s.id) });
   }
   async function logoutAll() {
     if (!confirm('Sair de todos os aparelhos? O telão também vai pedir a senha de novo. Use se perdeu um celular que tava logado.')) return;

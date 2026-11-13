@@ -244,7 +244,13 @@ async function wire(page, b, { admin = true } = {}) {
     b.apiCalls.push({ path, method: req.method(), body });
     const json = (data, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
     if (path === '/api/admin/login') return json({ admin });
-    if (path === '/api/tv') return json({ owner: b.claimTv(body.id, body.force === true) });
+    if (path === '/api/tv') {
+      b.tvCalls = (b.tvCalls ?? []).concat({ ...body });
+      // a mirror (passive) never takes over by itself: it only renews a lock it already holds
+      if (body.passive === true && !body.force) return json({ owner: b.tvOwner === body.id ? b.claimTv(body.id, false) : false });
+      return json({ owner: b.claimTv(body.id, body.force === true) });
+    }
+    if (path === '/api/admin/singers' && req.method() === 'GET') return json({ singers: b.oldBlocked ?? [] });
     if (path === '/api/player') {
       b.playerCalls.push({ ...body, mode: b.playerMode });
       if (body.tv && !b.claimTv(body.tv, false)) return json({ error: 'Outro telão tá no comando.', notOwner: true }, 409);
@@ -1345,6 +1351,133 @@ await test('celular: trocar a música mantém o lugar na fila', async () => {
   expect(b.swaps === 1, 'não trocou');
   expect(b.queue.filter((q) => q.singer_id === b.me.id).length === 1 && mine.position === before, 'perdeu o lugar na fila');
   expect((await page.getByRole('button', { name: 'Trocar a música' }).count()) === 1, 'o celular não voltou ao normal');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+// ---------------------------------------------------------------- correções da revisão 2 (13/11)
+
+for (const startedBefore of [false, true]) {
+  await test(`internet do projetor pisca 30 s com outro telão aberto${startedBefore ? ' (que já tocou antes)' : ''}: o projetor continua no comando`, async () => {
+    const b = makeBackend();
+    b.add('Ana', 'vidAAAAAAA1', { duration: 400 });
+    b.add('Bia', 'vidBBBBBBB2', { duration: 400 });
+    b.settings.max_duration_sec = 600;
+    const one = await openTv(b);
+    await one.page.evaluate(() => ((window.__yt.dur.vidAAAAAAA1 = 400), (window.__yt.dur.vidBBBBBBB2 = 400)));
+    await until(one.page, async () => (await yt(one.page)).state === 1, 20000);
+    const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+    const p2 = await ctx2.newPage();
+    if (startedBefore) await p2.addInitScript(() => localStorage.setItem('karaoke_started', '1'));
+    await p2.clock.install();
+    await wire(p2, b, { admin: true });
+    await p2.goto(BASE + '/');
+    await run(p2, 3000);
+    expect((await p2.locator('.mirror-overlay').count()) === 1, 'o segundo não virou espelho');
+    await run(p2, 130000); // the second screen has been open a while
+    await run(one.page, 3000);
+    // the projector's heartbeats are lost for a little over 30 s (internet blinked)
+    b.tvSeen = Date.now() - 31000;
+    await run(p2, 9000);
+    await run(one.page, 9000); // projector back online: next heartbeat
+    expect((await p2.locator('.mirror-overlay').count()) === 1, 'o segundo telão assumiu sozinho');
+    expect((await one.page.locator('.mirror-overlay').count()) === 0, 'o projetor perdeu o comando');
+    expect((await yt(one.page)).state === 1, 'a música parou no projetor');
+    expect(b.queue[0].status === 'playing', `a música foi cortada: ${statuses(b)}`);
+    await one.ctx.close();
+    await ctx2.close();
+  });
+}
+
+await test('projetor reabre (Chrome fechou e abriu): espera o telão antigo liberar e volta a tocar sozinho', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'vidAAAAAAA1', { duration: 400 });
+  b.settings.max_duration_sec = 600;
+  const one = await openTv(b);
+  await one.page.evaluate(() => (window.__yt.dur.vidAAAAAAA1 = 400));
+  await until(one.page, async () => (await yt(one.page)).state === 1, 20000);
+  await one.ctx.close(); // Chrome closed: the old screen's lock is still fresh
+  const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const p2 = await ctx2.newPage();
+  const errors = [];
+  p2.on('pageerror', (e) => errors.push(e.message));
+  await p2.addInitScript(() => localStorage.setItem('karaoke_started', '1'));
+  await p2.clock.install();
+  await wire(p2, b, { admin: true });
+  await p2.goto(BASE + '/');
+  await run(p2, 3000);
+  expect((await p2.locator('.mirror-overlay').textContent().catch(() => '')).includes('Esperando'), 'não avisou que está esperando o telão anterior');
+  b.tvSeen = Date.now() - 31000; // the old lock ran out
+  await run(p2, 9000);
+  expect((await p2.locator('.mirror-overlay').count()) === 0, 'o projetor reaberto não voltou a ser o telão');
+  expect((await until(p2, async () => (await yt(p2)).state === 1, 30000)) >= 0, 'não voltou a tocar');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx2.close();
+});
+
+await test('"Duplicar aba" no telão: a aba nova vira espelho, não um segundo telão no comando', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'vidAAAAAAA1', { duration: 400 });
+  b.settings.max_duration_sec = 600;
+  const one = await openTv(b);
+  await one.page.evaluate(() => (window.__yt.dur.vidAAAAAAA1 = 400));
+  await until(one.page, async () => (await yt(one.page)).state === 1, 20000);
+  const id = await one.page.evaluate(() => sessionStorage.getItem('karaoke_tv_id'));
+  // same browser, the copied tab brings the same id in its sessionStorage
+  const p2 = await one.ctx.newPage();
+  await p2.addInitScript((v) => sessionStorage.setItem('karaoke_tv_id', v), id);
+  await p2.clock.install();
+  await wire(p2, b, { admin: true });
+  await p2.goto(BASE + '/');
+  for (let i = 0; i < 12; i++) {
+    await run(one.page, 250);
+    await run(p2, 250);
+  }
+  const id2 = await p2.evaluate(() => sessionStorage.getItem('karaoke_tv_id'));
+  expect(id2 && id2 !== id, 'a aba duplicada ficou com o mesmo id do telão');
+  expect((await p2.locator('.mirror-overlay').count()) === 1, 'a aba duplicada não virou espelho');
+  expect((await yt(p2)).players === 0, 'a aba duplicada criou um player');
+  await run(one.page, 9000);
+  expect((await one.page.locator('.mirror-overlay').count()) === 0 && (await yt(one.page)).state === 1, 'o telão original perdeu o comando');
+  await one.ctx.close();
+});
+
+await test('admin: quem foi recusado numa noite anterior continua na lista e pode ser liberado', async () => {
+  const b = makeBackend();
+  b.oldBlocked = [{ id: '00000000-0000-4000-8000-00000000abcd', name: 'Recusado Semana Passada', status: 'blocked', created_at: '2026-11-01T23:00:00Z' }];
+  const ctx = await browser.newContext({ viewport: { width: 420, height: 900 } });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.clock.install();
+  await wire(page, b, { admin: true });
+  await page.goto(BASE + '/admin');
+  await run(page, 2000);
+  await page.locator('details', { hasText: 'Recusados' }).locator('summary').click().catch(() => {});
+  await run(page, 300);
+  expect((await page.getByText('Recusado Semana Passada').count()) >= 1, 'o recusado antigo não aparece no admin');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('celular: depois de zerar a noite, o "Mandou bem" da noite anterior some sozinho', async () => {
+  const b = makeBackend();
+  Object.assign(b.settings, { ranking_enabled: true, night_started_at: new Date(Date.now() - 3600e3).toISOString() });
+  const { page, ctx, errors } = await openPhone(b);
+  b.queue.push({ id: b.nextId++, singer_id: b.me.id, video_id: 'mineAAAAAA1', title: 'Evidências (Karaokê Version)', thumbnail: null, duration_sec: 200, status: 'playing', position: 1, created_at: new Date().toISOString(), started_at: new Date().toISOString() });
+  b.notify('queue');
+  expect((await until(page, async () => (await page.getByText('Você tá no palco').count()) === 1, 5000)) >= 0, 'o celular não viu a pessoa no palco');
+  const mine = b.queue[b.queue.length - 1];
+  Object.assign(mine, { status: 'done', score: 5, reaction_count: 3 });
+  b.notify('queue');
+  expect((await until(page, async () => (await page.getByText('Mandou bem').count()) === 1, 20000)) >= 0, 'o "Mandou bem" não apareceu');
+  // admin: "Zerar a noite"
+  b.settings.night_started_at = new Date().toISOString();
+  b.notify('settings');
+  expect((await until(page, async () => (await page.getByText('Mandou bem').count()) === 0, 5000)) >= 0, 'o "Mandou bem" ficou depois de zerar a noite');
+  await page.reload();
+  await run(page, 2000);
+  expect((await page.getByText('Mandou bem').count()) === 0, 'o "Mandou bem" voltou depois de recarregar');
   expect(errors.length === 0, errors.join('; '));
   await ctx.close();
 });
