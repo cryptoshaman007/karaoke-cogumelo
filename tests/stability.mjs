@@ -93,6 +93,7 @@ function makeBackend() {
     settings: {
       id: 1, max_duration_sec: 360, require_approval: true, queue_open: true, intermission_sec: 2, tv_message: '',
       paused: false, volume: 100, restart_at: null, contest_id: null, results_contest_id: null, reactions_enabled: true,
+      tv_add_enabled: true, songs_per_person: 1,
     },
     nextId: 1,
     playerCalls: [],
@@ -106,6 +107,16 @@ function makeBackend() {
     restDelay: 0, // ms each Supabase answer takes
     searchMode: 'ok', // 'ok' | 'hang'
     queuePosts: 0,
+    reserves: [],
+    // same rule as the promote_reserves SQL function
+    promote() {
+      for (const sid of [...new Set(b.reserves.map((r) => r.singer_id))]) {
+        if (b.queue.some((q) => q.singer_id === sid && ['waiting', 'playing'].includes(q.status))) continue;
+        const r = b.reserves.find((x) => x.singer_id === sid);
+        b.reserves.splice(b.reserves.indexOf(r), 1);
+        b.queue.push({ ...r, id: b.nextId++, status: 'waiting', position: b.nextId, started_at: null });
+      }
+    },
     add(name, videoId, { status = 'approved', duration = 20 } = {}) {
       const sid = `00000000-0000-4000-8000-${String(b.nextId).padStart(12, '0')}`;
       b.singers[sid] = { id: sid, name, status, created_at: new Date().toISOString() };
@@ -131,12 +142,18 @@ function makeBackend() {
         next.started_at = new Date().toISOString();
       }
       b.settings.paused = false;
+      b.promote();
       b.notify('queue');
       return next?.id ?? null;
     },
     notify(table) {
       for (const s of b.sockets) s.push(table);
     },
+    insert(table, record) {
+      for (const s of b.sockets) s.push(table, 'INSERT', record);
+    },
+    nightMode: 'fresh', // 'fresh' | 'reset' | 'hang'
+    nightCalls: 0,
     dropSockets() {
       for (const s of [...b.sockets]) s.close();
     },
@@ -160,7 +177,14 @@ async function wire(page, b, { admin = true } = {}) {
     const table = url.pathname.split('/').pop();
     const single = (route.request().headers()['accept'] ?? '').includes('vnd.pgrst.object');
     let body;
-    if (table === 'queue') {
+    if (table === 'queue' && url.searchParams.get('id')?.startsWith('eq.')) {
+      // one row by id (the projector asking for the grade of the song that just ended)
+      const row = b.queue.find((q) => `eq.${q.id}` === url.searchParams.get('id')) ?? null;
+      body = single ? row : row ? [row] : [];
+    } else if (table === 'queue' && url.searchParams.get('score')) {
+      // night ranking: graded songs, best first
+      body = b.queue.filter((q) => q.score != null).sort((x, y) => y.score - x.score);
+    } else if (table === 'queue') {
       body = b.queue.filter((q) => ['waiting', 'playing'].includes(q.status)).sort((x, y) => x.position - y.position || x.id - y.id);
     } else if (table === 'settings') body = single ? b.settings : [b.settings];
     else if (table === 'singers') {
@@ -189,13 +213,26 @@ async function wire(page, b, { admin = true } = {}) {
       if (b.playerMode === '401') return json({ error: 'Faça login no admin' }, 401);
       return json({ playing: b.advance(body.current ?? null, body.endStatus === 'skipped' ? 'skipped' : 'done') });
     }
+    if (path === '/api/night') {
+      b.nightCalls++;
+      if (b.nightMode === 'hang') return; // never answers
+      if (b.nightMode === 'reset') {
+        for (const q of b.queue) if (['waiting', 'playing'].includes(q.status)) q.status = 'skipped';
+        b.nightMode = 'fresh';
+        b.notify('queue');
+        return json({ ok: true, result: 'reset' });
+      }
+      return json({ ok: true, result: 'fresh' });
+    }
     if (path === '/api/admin/settings') {
+      if (body.rankingOnTv != null) b.settings.ranking_on_tv = !!body.rankingOnTv;
       if (body.paused != null) b.settings.paused = !!body.paused;
       if (body.restart) Object.assign(b.settings, { restart_at: new Date().toISOString(), paused: false });
       b.notify('settings');
       return json({ ok: true });
     }
     if (path === '/api/popular') return json({ songs: [] });
+    if (path === '/api/gif') return json(req.method() === 'GET' ? { search: false, results: [] } : { ok: true });
     if (path === '/api/join') {
       const sid = `00000000-0000-4000-9000-${String(b.nextId++).padStart(12, '0')}`;
       b.singers[sid] = { id: sid, name: body.name, status: 'approved', created_at: new Date().toISOString() };
@@ -207,17 +244,34 @@ async function wire(page, b, { admin = true } = {}) {
       if (b.searchMode === 'hang') return;
       return json({ results: [{ videoId: 'pickAAAAAA1', title: 'Evidências (karaoke)', thumbnail: '', durationSec: 200, channel: 'Canal' }] });
     }
+    if (path === '/api/queue' && req.method() === 'GET') {
+      return json({ reserves: b.reserves.filter((r) => r.singer_id === b.me.id) });
+    }
+    if (path === '/api/queue' && req.method() === 'DELETE') {
+      const rid = new URL(req.url()).searchParams.get('reserve');
+      if (rid) b.reserves = b.reserves.filter((r) => String(r.id) !== rid);
+      return json({ ok: true });
+    }
     if (path === '/api/queue' && req.method() === 'POST') {
       b.queuePosts++;
       await new Promise((r) => setTimeout(r, 300));
-      if (b.queue.some((q) => q.singer_id === b.me.id && ['waiting', 'playing'].includes(q.status))) {
-        return json({ error: 'Você já tem uma música na fila. Espere ela tocar!' }, 409);
-      }
-      b.queue.push({
+      const row = {
         id: b.nextId++, singer_id: b.me.id, video_id: body.videoId, title: body.title, thumbnail: null, duration_sec: body.durationSec,
-        status: 'waiting', position: b.nextId, created_at: new Date().toISOString(), started_at: null,
-      });
+        created_at: new Date().toISOString(),
+      };
+      if (b.queue.some((q) => q.singer_id === b.me.id && ['waiting', 'playing'].includes(q.status))) {
+        const mine = b.reserves.filter((r) => r.singer_id === b.me.id).length;
+        if (1 + mine >= b.settings.songs_per_person) return json({ error: 'Você já tem uma música na fila. Espere ela tocar!' }, 409);
+        b.reserves.push(row);
+        return json({ ok: true, where: 'reserve' });
+      }
+      b.queue.push({ ...row, status: 'waiting', position: b.nextId, started_at: null });
       b.notify('queue');
+      return json({ ok: true, where: 'queue' });
+    }
+    if (path === '/api/admin/queue' && body.action === 'add') {
+      if (body.from === 'tv' && !b.settings.tv_add_enabled) return json({ error: 'Adicionar pelo telão está desligado.' }, 403);
+      b.add(body.name, body.song.videoId, { duration: body.song.durationSec });
       return json({ ok: true });
     }
     return json({ error: 'not mocked' }, 404);
@@ -228,11 +282,11 @@ async function wire(page, b, { admin = true } = {}) {
     if (b.wsMode === 'refuse') return ws.close();
     const topics = new Map();
     const sock = {
-      push(table) {
+      push(table, type = 'UPDATE', record = {}) {
         for (const [topic, binds] of topics) {
           const ids = binds.filter((x) => x.table === table).map((x) => x.id);
           if (!ids.length) continue;
-          const data = { type: 'UPDATE', schema: 'public', table, commit_timestamp: new Date().toISOString(), columns: [], record: {}, old_record: {}, errors: null };
+          const data = { type, schema: 'public', table, commit_timestamp: new Date().toISOString(), columns: [], record, old_record: {}, errors: null };
           try {
             ws.send(JSON.stringify([null, null, topic, 'postgres_changes', { ids, data }]));
           } catch {}
@@ -308,6 +362,13 @@ const yt = (page) => page.evaluate(() => {
   return { loads: y?.loads ?? [], players: y?.players.length ?? 0, state: p?.state, time: p?.time, videoId: p?.videoId };
 });
 const statuses = (b) => b.queue.map((q) => `${q.video_id}:${q.status}`).join(' ');
+
+/** With SHOTS=<folder> the new screens are photographed along the way (to check the look). */
+async function shot(page, name) {
+  if (!process.env.SHOTS) return;
+  await new Promise((r) => setTimeout(r, 700)); // real time, so CSS animations finish
+  await page.screenshot({ path: `${process.env.SHOTS}/${name}.png` });
+}
 
 function expect(cond, msg) {
   if (!cond) throw new Error(msg);
@@ -721,7 +782,7 @@ await test('botões do telão: pausar, voltar ao início e pular', async () => {
   expect((await until(page, async () => (await yt(page)).state === 2, 5000)) >= 0, 'não pausou');
   await run(page, 30000);
   expect((await yt(page)).state === 2, 'voltou a tocar sozinho durante a pausa');
-  await page.getByRole('button', { name: 'Bora cantar' }).click();
+  await page.getByRole('button', { name: 'Continuar' }).click();
   expect((await until(page, async () => (await yt(page)).state === 1, 5000)) >= 0, 'não continuou');
   await page.getByRole('button', { name: 'Voltar ao início da música' }).click();
   expect((await until(page, async () => (await yt(page)).time < 10, 5000)) >= 0, 'não voltou ao início');
@@ -730,6 +791,61 @@ await test('botões do telão: pausar, voltar ao início e pular', async () => {
   for (let i = 0; i < 6; i++) await skip.click({ force: true, timeout: 500 }).catch(() => {});
   await until(page, async () => (await yt(page)).videoId === 'vidBBBBBBB2' && (await yt(page)).state === 1, 20000);
   expect(b.queue[0].status === 'skipped' && b.queue[1].status === 'playing', `pulo errado: ${statuses(b)}`);
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('telão: botão de adicionar pedido coloca a pessoa na fila; desligado nas configurações, some', async () => {
+  const b = makeBackend();
+  const { page, ctx, errors } = await openTv(b);
+  await page.getByRole('button', { name: 'Adicionar pedido' }).click();
+  await page.getByPlaceholder('Nome').fill('Dona Lúcia');
+  await page.getByRole('searchbox').fill('evidencias');
+  await page.getByRole('button', { name: 'Buscar' }).click();
+  await run(page, 1000);
+  await page.getByRole('button', { name: 'Adicionar', exact: true }).click();
+  await run(page, 1500);
+  expect(b.queue.length === 1 && Object.values(b.singers)[0].name === 'Dona Lúcia', `não entrou na fila: ${statuses(b)}`);
+  expect((await page.locator('.add-card .ok').count()) === 1, 'não confirmou na tela');
+  await page.getByRole('button', { name: 'Fechar' }).click();
+  expect((await until(page, async () => (await yt(page)).state === 1, 30000)) >= 0, 'a música adicionada não tocou');
+  b.settings.tv_add_enabled = false;
+  b.notify('settings');
+  await run(page, 2000);
+  expect((await page.getByRole('button', { name: 'Adicionar pedido' }).count()) === 0, 'o botão continuou na tela');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('duas músicas por pessoa: a segunda fica de reserva e entra no fim da fila depois que a pessoa canta', async () => {
+  const b = makeBackend();
+  b.settings.songs_per_person = 2;
+  const { page, ctx, errors } = await openPhone(b);
+  const pickOne = async (label) => {
+    await page.getByRole('searchbox').fill('evidencias');
+    await page.getByRole('button', { name: 'Buscar' }).click();
+    await run(page, 1000);
+    await page.getByRole('button', { name: label, exact: true }).click();
+    await new Promise((r) => setTimeout(r, 500)); // the fake server takes 300 ms of real time
+    await run(page, 2500);
+  };
+  await pickOne('Cantar');
+  expect(b.queue.length === 1, 'a primeira não entrou na fila');
+  await pickOne('Guardar');
+  expect(b.reserves.length === 1 && b.queue.length === 1, `a segunda deveria ser reserva: fila ${b.queue.length}, reservas ${b.reserves.length}`);
+  expect((await page.getByText('Sua próxima música').count()) === 1, 'o celular não mostrou a reserva');
+  expect((await page.getByRole('searchbox').count()) === 0, 'deixou escolher uma terceira com limite 2');
+  // other people join, then Zeca sings
+  b.add('Ana', 'vidAAAAAAA1');
+  b.add('Bia', 'vidBBBBBBB2');
+  let cur = b.advance(null, 'done'); // Zeca playing
+  cur = b.advance(cur, 'done'); // Zeca done -> reserve joins the end
+  await run(page, 3000);
+  const order = b.queue.filter((q) => ['playing', 'waiting'].includes(q.status)).sort((x, y) => (x.status === 'playing' ? -1 : y.status === 'playing' ? 1 : x.position - y.position)).map((q) => b.singers[q.singer_id].name).join(',');
+  expect(order === 'Ana,Bia,Zeca', `ordem errada: ${order}`);
+  expect(b.reserves.length === 0, 'a reserva não saiu da reserva');
+  expect((await until(page, async () => (await page.getByText('pessoa na sua frente').count()) === 1, 5000)) >= 0, 'o celular não mostrou a música na fila');
+  expect((await page.getByText('Sua próxima música').count()) === 0, 'a reserva continuou aparecendo');
   expect(errors.length === 0, errors.join('; '));
   await ctx.close();
 });
@@ -801,6 +917,138 @@ await test('celular com internet lenta e bar cheio: a fila na tela não fica par
   expect(seenDuring >= 8, `a tela só mostrou ${seenDuring} pessoas enquanto ${n} entravam`);
   await ctx.close();
   return `${seenDuring - 1} de ${n} pessoas já apareciam durante o movimento`;
+});
+
+await test('telão abre no dia seguinte: a fila da noite passada é limpa antes de qualquer música tocar', async () => {
+  const b = makeBackend();
+  b.add('Ontem 1', 'oldAAAAAAA1');
+  b.add('Ontem 2', 'oldBBBBBBB2');
+  b.advance(null, 'done'); // one was even left "playing" when the PC was turned off
+  b.nightMode = 'reset';
+  const { page, ctx, errors } = await openTv(b);
+  await run(page, 20000);
+  expect((await yt(page)).loads.length === 0, `tocou música da noite passada: ${JSON.stringify((await yt(page)).loads)}`);
+  expect(b.queue.every((q) => q.status === 'skipped'), `fila não foi limpa: ${statuses(b)}`);
+  // and tonight's first song plays normally
+  b.add('Hoje', 'newAAAAAAA1');
+  expect((await until(page, async () => (await yt(page)).videoId === 'newAAAAAAA1' && (await yt(page)).state === 1, 30000)) >= 0, 'a primeira música da noite não tocou');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('conferência da noite não responde: o karaokê começa mesmo assim', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'vidAAAAAAA1');
+  b.nightMode = 'hang';
+  const { page, ctx, errors } = await openTv(b);
+  const t = await until(page, async () => (await yt(page)).state === 1, 40000);
+  expect(t >= 0, 'a música nunca começou');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+  return `começou em ${Math.round(t / 1000)} s`;
+});
+
+await test('ranking da noite: a nota aparece no fim da música, some sozinha e a próxima toca', async () => {
+  const b = makeBackend();
+  Object.assign(b.settings, { ranking_enabled: true, ranking_on_tv: false, night_started_at: new Date(0).toISOString() });
+  const first = b.add('Ana', 'vidAAAAAAA1');
+  b.add('Bia', 'vidBBBBBBB2');
+  const { page, ctx, errors } = await openTv(b);
+  expect((await until(page, async () => (await yt(page)).videoId === 'vidAAAAAAA1' && (await yt(page)).state === 1, 30000)) >= 0, 'a primeira não tocou');
+  first.score = 8.7; // what the database trigger would write when the song ends
+  first.reaction_count = 12;
+  expect((await until(page, async () => (await page.locator('.score-card').count()) === 1, 40000)) >= 0, 'a nota não apareceu');
+  await run(page, 600);
+  await shot(page, 'tv-nota');
+  const text = await page.locator('.score-card').textContent();
+  expect(text.includes('8,7') && text.includes('Ana'), `nota errada na tela: ${text}`);
+  expect((await until(page, async () => (await page.locator('.score-card').count()) === 0, 12000)) >= 0, 'a nota ficou presa na tela');
+  expect((await until(page, async () => (await yt(page)).videoId === 'vidBBBBBBB2' && (await yt(page)).state === 1, 30000)) >= 0, 'a segunda não tocou');
+  // admin opens the night ranking on the projector: the video waits, and closing it resumes
+  b.settings.ranking_on_tv = true;
+  b.notify('settings');
+  expect((await until(page, async () => (await page.locator('.results-screen').count()) === 1 && (await yt(page)).state === 2, 10000)) >= 0, 'o ranking não abriu ou o vídeo não esperou');
+  await shot(page, 'tv-ranking');
+  expect((await page.locator('.results-screen').textContent()).includes('Ana'), 'ranking sem a líder');
+  await page.getByRole('button', { name: 'Fechar o ranking' }).click();
+  expect((await until(page, async () => (await page.locator('.results-screen').count()) === 0 && (await yt(page)).state === 1, 10000)) >= 0, 'não voltou a tocar depois de fechar o ranking');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('GIFs e figurinhas no telão: aparecem, somem sozinhos e endereço estranho é ignorado', async () => {
+  const b = makeBackend();
+  b.settings.gifs_enabled = true;
+  b.add('Ana', 'vidAAAAAAA1', { duration: 300 });
+  const { page, ctx, errors } = await openTv(b);
+  await page.evaluate(() => (window.__yt.dur.vidAAAAAAA1 = 300));
+  await page.route(/giphy\.com/, (route) => route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==', 'base64') }));
+  await until(page, async () => (await yt(page)).state === 1, 30000);
+  b.insert('tv_gifs', { id: 1, kind: 'gif', ref: 'https://evil.example.com/x.gif', name: 'Mal' });
+  b.insert('tv_gifs', { id: 2, kind: 'sticker', ref: 'nao-existe', name: 'Mal' });
+  await run(page, 1000);
+  expect((await page.locator('.gif-pop').count()) === 0, 'mostrou um GIF de endereço não permitido');
+  b.insert('tv_gifs', { id: 3, kind: 'sticker', ref: 'bis', name: 'Zeca' });
+  for (let i = 4; i < 30; i++) b.insert('tv_gifs', { id: i, kind: 'gif', ref: 'https://media1.giphy.com/media/abc/200.gif', name: 'Bia' });
+  expect((await until(page, async () => (await page.locator('.gif-pop .sticker').count()) === 1, 3000)) >= 0, 'a figurinha não apareceu');
+  await run(page, 500);
+  await shot(page, 'tv-figurinha');
+  expect((await page.locator('.gif-pop').textContent()).includes('Zeca mandou'), 'sem o nome de quem mandou');
+  expect((await until(page, async () => (await page.locator('.gif-pop img').count()) === 1, 10000)) >= 0, 'o GIF não apareceu depois da figurinha');
+  // the burst of 26 was cut to a short line: everything is gone within a minute, video untouched
+  expect((await until(page, async () => (await page.locator('.gif-pop').count()) === 0, 60000)) >= 0, 'GIFs ficaram presos na tela');
+  expect((await yt(page)).state === 1 && (await yt(page)).loads.length === 1, 'os GIFs atrapalharam o vídeo');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('engrenagem do vídeo: velocidade, legenda e controles do YouTube sem perder o ponto da música', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'vidAAAAAAA1', { duration: 300 });
+  b.add('Bia', 'vidBBBBBBB2', { duration: 300 });
+  const { page, ctx, errors } = await openTv(b);
+  await page.evaluate(() => ((window.__yt.dur.vidAAAAAAA1 = 300), (window.__yt.dur.vidBBBBBBB2 = 300)));
+  await until(page, async () => (await yt(page)).time > 40, 80000);
+  await page.getByRole('button', { name: 'Opções do vídeo' }).click();
+  await page.getByRole('button', { name: '0,75×' }).click();
+  await shot(page, 'tv-engrenagem');
+  await page.getByRole('button', { name: 'Desligada' }).click();
+  await run(page, 3000);
+  expect((await yt(page)).state === 1, 'mexer em velocidade/legenda parou o vídeo');
+  const before = await yt(page);
+  await page.getByRole('button', { name: 'Escolher no YouTube' }).click();
+  expect((await until(page, async () => (await yt(page)).players === before.players + 1 && (await yt(page)).state === 1, 30000)) >= 0, 'o vídeo não voltou depois de ligar os controles do YouTube');
+  const after = await yt(page);
+  const last = after.loads[after.loads.length - 1];
+  expect(last.videoId === 'vidAAAAAAA1' && last.startSeconds > 30, `não voltou no mesmo ponto: ${JSON.stringify(last)}`);
+  expect((await page.locator('.player-wrap.interactive').count()) === 1, 'o vídeo não ficou clicável');
+  expect(b.queue[0].status === 'playing', `mexeu na fila: ${statuses(b)}`);
+  // next song: YouTube's controls go away by themselves and the song plays from the start
+  await page.getByRole('button', { name: 'Pular para a próxima' }).click();
+  expect((await until(page, async () => (await yt(page)).videoId === 'vidBBBBBBB2' && (await yt(page)).state === 1, 40000)) >= 0, 'a próxima não tocou');
+  expect((await page.locator('.player-wrap.interactive').count()) === 0, 'os controles do YouTube continuaram ligados');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('celular: ranking da noite e figurinha pro telão', async () => {
+  const b = makeBackend();
+  Object.assign(b.settings, { ranking_enabled: true, gifs_enabled: true, night_started_at: new Date(0).toISOString() });
+  const done = b.add('Ana', 'vidAAAAAAA1');
+  Object.assign(done, { status: 'done', score: 9.1, reaction_count: 7 });
+  const { page, ctx, errors } = await openPhone(b);
+  expect((await until(page, async () => (await page.getByText('Ranking da noite').count()) === 1, 5000)) >= 0, 'sem ranking no celular');
+  await shot(page, 'celular-ranking');
+  expect((await page.locator('.ranking').textContent()).includes('9,1'), 'ranking sem a nota');
+  await page.getByRole('button', { name: 'Mandar GIF ou figurinha pro telão' }).click();
+  await run(page, 500);
+  await shot(page, 'celular-gif');
+  await page.getByRole('button', { name: /Bis! Bis!/ }).click();
+  await run(page, 1000);
+  expect(b.apiCalls.some((c) => c.path === '/api/gif' && c.method === 'POST' && c.body.sticker === 'bis'), 'a figurinha não foi enviada');
+  expect((await page.locator('.sheet').count()) === 0, 'a folha de GIFs não fechou');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
 });
 
 await browser.close();

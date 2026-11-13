@@ -38,6 +38,7 @@ export async function resetNightNow(): Promise<void> {
   const { error } = await sb.rpc('reset_night', { p_auto: false });
   if (!error) return;
   if (!isMissingSchema(error)) throw error;
+  await sb.from('reserves').delete().gte('id', 0); // ignored if the table does not exist
   const { error: e2 } = await sb.from('queue').update({ status: 'skipped' }).in('status', ['waiting', 'playing']);
   if (e2) throw e2;
   await sb.from('settings').update({ paused: false }).eq('id', 1);

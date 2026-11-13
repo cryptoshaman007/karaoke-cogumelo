@@ -5,7 +5,7 @@ import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
 import { del, get, post, useLive } from '@/lib/useLive';
 import { timeoutSignal } from '@/lib/timeout';
-import { fmtScore, REACTIONS, SCORE_EMOJIS, SCORE_LABELS, scorePhrase, type QueueItem, type SearchResult, type Singer } from '@/lib/types';
+import { fmtScore, REACTIONS, SCORE_EMOJIS, SCORE_LABELS, scorePhrase, type QueueItem, type Reserve, type SearchResult, type Singer } from '@/lib/types';
 
 const TOKEN_KEY = 'karaoke_token';
 
@@ -186,20 +186,45 @@ function Room({ me, token }: { me: Singer; token: string }) {
     prevStage.current = stage;
   }, [stage]);
 
+  // songs left in reserve: they join the end of the queue after this person's current song
+  const [reserves, setReserves] = useState<Reserve[]>([]);
+  const loadReserves = useCallback(async () => {
+    try {
+      const d = await get('/api/queue', { 'x-singer-token': token });
+      setReserves(Array.isArray(d.reserves) ? d.reserves : []);
+    } catch {}
+  }, [token]);
+  const maxSongs = settings?.songs_per_person ?? 1;
+  // again whenever this person's song in the queue changes (a reserve may have just moved in)
+  useEffect(() => {
+    void loadReserves();
+  }, [loadReserves, entry?.id, maxSongs]);
+
   const add = useCallback(
     async (song: SearchResult) => {
       await post('/api/queue', song, { 'x-singer-token': token });
-      await refresh();
+      await Promise.all([refresh(), loadReserves()]);
     },
-    [token, refresh],
+    [token, refresh, loadReserves],
   );
+
+  async function removeReserve(id: number) {
+    setErr('');
+    try {
+      await del(`/api/queue?reserve=${id}`, { 'x-singer-token': token });
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+    await loadReserves();
+  }
+  const canReserve = !!entry && open && self.status !== 'blocked' && 1 + reserves.length < maxSongs;
 
   async function removeMine() {
     if (!confirm('Tirar sua música da fila? Você pode escolher outra depois.')) return;
     setErr('');
     try {
       await del('/api/queue', { 'x-singer-token': token });
-      await refresh();
+      await Promise.all([refresh(), loadReserves()]);
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -284,6 +309,35 @@ function Room({ me, token }: { me: Singer; token: string }) {
               Trocar ou tirar a música
             </button>
           )}
+        </section>
+      )}
+
+      {self.status !== 'blocked' && reserves.length > 0 && (
+        <section className="card">
+          <span className="label">{reserves.length === 1 ? 'Sua próxima música' : 'Suas próximas músicas'}</span>
+          <ul className="rows">
+            {reserves.map((r) => (
+              <li key={r.id}>
+                <div className="grow">
+                  <strong>{r.title}</strong>
+                </div>
+                <button className="btn small icon-only danger" aria-label={`Tirar ${r.title}`} onClick={() => removeReserve(r.id)}>
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+          <span className="muted small">Entra no fim da fila depois que você cantar a de agora.</span>
+        </section>
+      )}
+
+      {canReserve && (
+        <section>
+          <h2 className="section-title">Quer deixar mais uma escolhida?</h2>
+          <SongSearch authHeaders={{ 'x-singer-token': token }} maxDurationSec={maxDurationSec} pickLabel="Guardar" onPick={add} />
+          <p className="muted small hint">
+            Ela fica de reserva e entra no fim da fila depois que você cantar. Até {maxSongs} músicas por pessoa.
+          </p>
         </section>
       )}
 

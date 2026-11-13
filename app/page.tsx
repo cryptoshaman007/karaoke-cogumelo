@@ -4,9 +4,10 @@ import QRCode from 'react-qr-code';
 import AdminLogin from '@/components/AdminLogin';
 import { useAdmin } from '@/lib/useAdmin';
 import Icon from '@/components/Icon';
+import SongSearch from '@/components/SongSearch';
 import { post, useLive, type ApiError } from '@/lib/useLive';
 import { browserClient } from '@/lib/supabase-browser';
-import { fmtScore, isGifUrl, REACTIONS, scorePhrase, STICKERS, type QueueItem, type Settings } from '@/lib/types';
+import { fmtScore, isGifUrl, REACTIONS, scorePhrase, STICKERS, type QueueItem, type SearchResult, type Settings } from '@/lib/types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
@@ -282,6 +283,25 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       setCtrlBusy(false);
     }
   }
+
+  // "Add a request" on the projector PC, for someone without a phone. Goes straight to the queue.
+  const [showAdd, setShowAdd] = useState(false);
+  const [addName, setAddName] = useState('');
+  const [added, setAdded] = useState('');
+  async function addRequest(song: SearchResult) {
+    const name = addName.trim();
+    if (!name) throw new Error('Põe o nome da pessoa primeiro');
+    try {
+      await post('/api/admin/queue', { action: 'add', from: 'tv', name, song });
+    } catch (e) {
+      if ((e as ApiError).status === 401) onLogout();
+      throw e;
+    }
+    setAdded(`${name} entrou na fila.`);
+    setAddName('');
+    void refresh();
+  }
+  const canAdd = !!settings?.tv_add_enabled && (settings?.queue_open ?? true);
 
   function clearIntro() {
     if (introTimer.current) clearInterval(introTimer.current);
@@ -1063,6 +1083,16 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           )}
         </div>
 
+        {canAdd && (
+          <button
+            className="tv-add"
+            title="Adicionar pedido"
+            aria-label="Adicionar pedido"
+            onClick={() => (setAdded(''), setShowAdd(true))}
+          >
+            <Icon name="plus" size={16} />
+          </button>
+        )}
         <button className="gear" title="Configurações" aria-label="Configurações" onClick={() => setShowSettings(true)}>
           <Icon name="gear" size={16} />
         </button>
@@ -1072,6 +1102,23 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           </span>
         )}
       </aside>
+
+      {showAdd && (
+        <div className="modal" onClick={() => setShowAdd(false)}>
+          <div className="card add-card" onClick={(e) => e.stopPropagation()}>
+            <h2>Adicionar pedido</h2>
+            <label className="field">
+              <span>Nome de quem vai cantar</span>
+              <input placeholder="Nome" maxLength={40} value={addName} autoFocus onChange={(e) => (setAddName(e.target.value), setAdded(''))} />
+            </label>
+            {added && <p className="ok">{added}</p>}
+            <SongSearch maxDurationSec={settings?.max_duration_sec ?? 360} pickLabel="Adicionar" onPick={addRequest} />
+            <button className="btn ghost self-start" onClick={() => setShowAdd(false)}>
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
 
       {showSettings && (
         <div className="modal" onClick={() => setShowSettings(false)}>

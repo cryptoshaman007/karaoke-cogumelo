@@ -3,6 +3,7 @@ const PATHS = {
   pause: 'M7 5h4v14H7zM13 5h4v14h-4z',
   skip: 'M6 5.5v13l9-6.5zM16 5h2.5v14H16z',
   restart: 'M12 5a7 7 0 1 1-6.6 4.7l1.9.6A5 5 0 1 0 12 7v3L7.5 6 12 2z',
+  plus: 'M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z',
   up: 'M12 7l6 7H6z',
   down: 'M12 17l6-7H6z',
   top: 'M6 5h12v2H6zM12 9l6 7H6z',

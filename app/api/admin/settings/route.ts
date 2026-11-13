@@ -36,6 +36,12 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(h) || h > 23) return fail('Hora entre 0 e 23');
     patch.night_reset_hour = h < 0 ? null : h;
   }
+  if (body.tvAddEnabled != null) patch.tv_add_enabled = Boolean(body.tvAddEnabled);
+  if (body.songsPerPerson != null) {
+    const n = Math.round(Number(body.songsPerPerson));
+    if (!Number.isFinite(n) || n < 1 || n > 3) return fail('Entre 1 e 3 músicas por pessoa');
+    patch.songs_per_person = n;
+  }
   if (body.paused != null) patch.paused = Boolean(body.paused);
   if (body.volume != null) {
     const v = Math.round(Number(body.volume));

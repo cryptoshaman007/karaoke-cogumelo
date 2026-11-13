@@ -15,6 +15,10 @@ App web de karaokê para o bar. O cliente escaneia o QR code, digita o nome, bus
 - **Reações:** enquanto alguém canta, o celular mostra quatro botões (👏 ❤️ 🔥 😭). Cada toque faz o emoji subir no telão. Limite de 8 reações a cada 10 segundos por pessoa. Liga e desliga em *Configurações* no admin.
 - **Campeonato:** o admin liga em *Campeonato*. Enquanto estiver valendo, cada cliente dá uma nota de 1 a 5 (cinco carinhas) para quem está cantando, pode trocar até a música acabar e não vota em si mesmo. Os votos são secretos; só o admin vê a parcial. Ao encerrar, o telão e os celulares mostram a classificação e o vencedor (melhor média; empate decide quem teve mais votos). O vídeo fica parado enquanto o resultado está no telão.
 
+- **Ranking da noite:** liga em *Ranking da noite* no admin e vale a noite toda. Quando cada música acaba, o telão mostra a "nota da galera" (de 5,0 a 10,0) por alguns segundos. A nota sai das reações: conta quantas **pessoas** reagiram (toques repetidos da mesma pessoa valem cada vez menos) em relação ao tamanho da plateia que está reagindo na noite. Quem canta não conta para a própria nota, música pulada no primeiro minuto não recebe nota, e o ranking fica pausado enquanto um campeonato está valendo. O admin pode abrir o ranking no telão.
+- **GIFs e figurinhas:** pelo botão *GIF* no celular, a pessoa manda uma figurinha animada (8 prontas, funcionam sem configurar nada) ou busca um GIF, que aparece num canto do vídeo por 7 segundos com o nome de quem mandou. Um por pessoa a cada 12 segundos; o telão mostra um de cada vez e guarda no máximo 4 na espera. A busca de GIFs usa o GIPHY e só aparece se a variável `GIPHY_API_KEY` estiver configurada na Vercel (chave gratuita em developers.giphy.com, limite de 100 buscas por hora, classificação "pg").
+- **Zerar a noite:** botão no admin (cartão *Fila*) que tira todo mundo da fila, apaga as reservas e recomeça o ranking. Há também a limpeza automática (padrão: todo dia às 12h, horário de Brasília; muda em *Configurações*): quando o telão é aberto, a cada 10 minutos com ele aberto, ou quando o primeiro cliente escolhe música, o que sobrou da noite anterior é limpo e a fila reabre. Ela só age se ninguém cantou nos últimos 45 minutos.
+- **Opções do vídeo (engrenagem ao lado de pausar/pular no telão):** velocidade (0,75×, normal, 1,25×; volta ao normal na música seguinte) e legenda (quando o vídeo tem). A qualidade o YouTube não deixa mais escolher por programação (desde 2019 ele decide sozinho pela internet e pelo tamanho da tela); o botão *Escolher no YouTube* liga os controles do próprio YouTube até o fim da música, para escolher na engrenagem dele.
 
 A fila fica salva no Supabase, então fechar o navegador ou desligar o PC não perde nada.
 
@@ -52,6 +56,14 @@ A fila fica salva no Supabase, então fechar o navegador ou desligar o PC não p
 - Votos e reações passam por funções do banco (`cast_vote`, `send_reaction`) chamadas só pelo servidor: uma ida ao banco por toque.
 - Limite de tentativas no login do admin (8 erros em 15 min), nas entradas e nas buscas, guardado na tabela `rate_events`.
 
+### Botões do telão, pedido pelo computador e músicas por pessoa
+
+- **Botões do telão:** no canto de baixo do vídeo ficam três botões pequenos e quase transparentes: pausar, voltar ao início da música e pular.
+- **Adicionar pedido pelo telão:** um “+” discreto ao lado da engrenagem abre uma janela para digitar o nome e escolher a música de quem está sem celular. Liga e desliga em *Configurações* no admin.
+- **Músicas por pessoa (1, 2 ou 3):** só uma música de cada pessoa fica na fila. As outras ficam de reserva e entram no fim da fila quando a pessoa termina de cantar, então ninguém canta duas seguidas.
+
+Estas duas últimas precisam da migração `supabase/migrations/004_reserves_and_tv_add.sql`. Sem ela o app continua funcionando como antes (uma música por pessoa, sem o botão “+”).
+
 ## Estabilidade
 
 O telão foi feito para ficar a noite inteira aberto sem ninguém mexer:
@@ -66,7 +78,7 @@ O telão foi feito para ficar a noite inteira aberto sem ninguém mexer:
 
 ## Banco de dados
 
-`supabase/schema.sql` cria o banco do zero. Depois rode, em ordem, os arquivos de `supabase/migrations/` (SQL Editor do Supabase). As migrações só adicionam coisas; o app funciona sem elas, mas as funções novas do admin (pausar, volume, recado, fila aberta/fechada) avisam que precisam da atualização.
+`supabase/schema.sql` cria o banco do zero. A migração `005_night_ranking_gifs.sql` traz o ranking da noite, os GIFs e a limpeza automática; sem ela o botão *Zerar a noite* já funciona (limpeza simples), e as outras funções novas ficam desligadas. Depois rode, em ordem, os arquivos de `supabase/migrations/` (SQL Editor do Supabase). As migrações só adicionam coisas; o app funciona sem elas, mas as funções novas do admin (pausar, volume, recado, fila aberta/fechada) avisam que precisam da atualização.
 
 ## Rodar localmente
 

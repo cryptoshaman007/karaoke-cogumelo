@@ -135,7 +135,7 @@ create trigger queue_score_song
   when (old.status = 'playing' and new.status in ('done', 'skipped'))
   execute function public.score_song();
 
--- Zera a noite: tira da fila tudo o que está esperando ou tocando, encerra campeonato aberto,
+-- Zera a noite: tira da fila tudo o que está esperando ou tocando (e as reservas), encerra campeonato aberto,
 -- limpa o que estava no telão e começa um ranking novo.
 -- p_auto = true é a limpeza automática: só age se já passou da hora configurada desde a última
 -- vez E se ninguém cantou nos últimos 45 minutos (o bar ainda aberto nunca perde a fila).
@@ -156,6 +156,10 @@ begin
     if exists (select 1 from queue where started_at > now() - interval '45 minutes') then return 'busy'; end if;
   end if;
 
+  -- as músicas de reserva (migração 004) também são da noite que acabou
+  if to_regclass('public.reserves') is not null then
+    execute 'delete from public.reserves';
+  end if;
   update queue set status = 'skipped' where status in ('waiting', 'playing');
 
   select id into v_contest from contests where ended_at is null limit 1;

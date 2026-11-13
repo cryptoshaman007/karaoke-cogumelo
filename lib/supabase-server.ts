@@ -31,7 +31,27 @@ export async function advanceQueue(current: number | null, endStatus: 'done' | '
   if (error) throw error;
   // A new song never starts paused. Ignored if the column does not exist yet.
   await db().from('settings').update({ paused: false }).eq('id', 1).eq('paused', true);
-  return (data as number | null) ?? null;
+  let playing = (data as number | null) ?? null;
+  // Whoever just sang gets their reserve song at the end of the queue. If the queue was empty,
+  // that reserve is the next song: start it right away.
+  if ((await promoteReserves()) > 0 && playing == null) {
+    const again = await db().rpc('advance_queue', { p_current: null, p_end_status: endStatus });
+    if (!again.error) playing = (again.data as number | null) ?? null;
+  }
+  return playing;
+}
+
+/**
+ * Moves reserve songs into the queue for everyone left without a song there. Returns how many
+ * moved. Safe to call at any time; does nothing if the database is not updated yet.
+ */
+export async function promoteReserves(): Promise<number> {
+  try {
+    const { data, error } = await db().rpc('promote_reserves');
+    return error ? 0 : Number(data) || 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** True when a database error means "the newer tables/functions are not installed yet". */
