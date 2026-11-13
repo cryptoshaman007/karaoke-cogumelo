@@ -143,7 +143,7 @@ begin
   end if;
 
   if to_regclass('public.reserves') is not null then
-    execute 'delete from public.reserves';
+    execute 'delete from public.reserves where true';
   end if;
   update queue set status = 'skipped' where status in ('waiting', 'playing');
 
@@ -176,7 +176,7 @@ begin
     )
     update singers set photo_at = null where id in (select singer_id from gone);
   else
-    delete from singer_photos;
+    delete from singer_photos where true;
     update singers set photo_at = null where photo_at is not null;
   end if;
   return new;

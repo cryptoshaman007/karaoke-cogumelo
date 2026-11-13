@@ -25,7 +25,7 @@ revoke all on public.singer_photos from anon, authenticated;
 create or replace function public.clear_photos_on_new_night()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  delete from singer_photos;
+  delete from singer_photos where true;
   update singers set photo_at = null where photo_at is not null;
   return new;
 end; $$;
