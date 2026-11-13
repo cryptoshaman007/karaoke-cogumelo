@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from 'react';
 import AdminLogin from '@/components/AdminLogin';
 import { useAdmin } from '@/lib/useAdmin';
 import Icon from '@/components/Icon';
+import Avatar from '@/components/Avatar';
 import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
 import { fmt, get, post, useLive, type ApiError } from '@/lib/useLive';
-import type { SearchResult, Standing } from '@/lib/types';
+import { photoUrl, type SearchResult, type Standing } from '@/lib/types';
 
 export default function AdminPage() {
   const [admin, setAdmin] = useAdmin();
@@ -117,6 +118,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
   const all = Object.values(singers);
   const pending = all.filter((s) => s.status === 'pending');
   const blocked = all.filter((s) => s.status === 'blocked');
+  const withPhoto = settings.photos_enabled ? all.filter((s) => s.status !== 'blocked' && s.photo_at) : [];
   const songOf = (singerId: string) => waiting.find((q) => q.singer_id === singerId);
   const vol = volume ?? settings.volume;
 
@@ -141,6 +143,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
           <ul className="rows">
             {pending.map((s) => (
               <li key={s.id}>
+                <Avatar src={photoUrl(s, settings)} size={40} />
                 <div className="grow">
                   <strong>{s.name}</strong>
                   <span className="muted small">{songOf(s.id)?.title ?? 'ainda escolhendo a música'}</span>
@@ -397,6 +400,13 @@ function Panel({ onLogout }: { onLogout: () => void }) {
             <span className="muted small">A galera manda pelo celular e aparece num cantinho do vídeo. Um por pessoa a cada 12 segundos.</span>
           </span>
         </label>
+        <label className="switch">
+          <input type="checkbox" checked={settings.photos_enabled} onChange={(e) => setting({ photosEnabled: e.target.checked })} />
+          <span>
+            <strong>Selfie de quem canta</strong>
+            <span className="muted small">Foto opcional que aparece no telão, na fila, no ranking e na figurinha da nota. Some no fim da noite.</span>
+          </span>
+        </label>
         <div className="field">
           <span>Limpeza automática da fila (pra não sobrar pedido da noite passada)</span>
           <select
@@ -478,6 +488,28 @@ function Panel({ onLogout }: { onLogout: () => void }) {
           </div>
         </div>
       </section>
+
+      {withPhoto.length > 0 && (
+        <section className="card">
+          <h2>
+            Fotos no telão <span className="count-pill muted-pill">{withPhoto.length}</span>
+          </h2>
+          <span className="muted small">Viu foto que não pode? Apaga aqui. A pessoa continua na fila.</span>
+          <ul className="rows">
+            {withPhoto.map((s) => (
+              <li key={s.id}>
+                <Avatar src={photoUrl(s, settings)} size={48} />
+                <div className="grow">
+                  <strong>{s.name}</strong>
+                </div>
+                <button className="btn danger small" disabled={busy} onClick={() => act('/api/admin/singers', { id: s.id, removePhoto: true })}>
+                  Apagar foto
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {blocked.length > 0 && (
         <details className="card fold">

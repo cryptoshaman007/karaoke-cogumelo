@@ -1,3 +1,4 @@
+import Avatar from './Avatar';
 import { fmtScore, type Standing } from '@/lib/types';
 
 interface Props {
@@ -9,10 +10,12 @@ interface Props {
   empty?: string;
   /** rows to paint as "this is you" */
   mine?: (row: Standing) => boolean;
+  /** selfie of the row's singer (night ranking), or null */
+  photo?: (row: Standing) => string | null;
 }
 
 /** Ranking: one row per performance, best grade first. Used by the contest and by the night ranking. */
-export default function Ranking({ rows, limit = 50, highlightFirst = false, unit = 'votes', empty, mine }: Props) {
+export default function Ranking({ rows, limit = 50, highlightFirst = false, unit = 'votes', empty, mine, photo }: Props) {
   if (rows.length === 0) return <p className="muted">{empty ?? 'Ninguém cantou ainda nesse campeonato.'}</p>;
   const count = (n: number) =>
     unit === 'votes' ? (n === 1 ? '1 voto' : `${n} votos`) : n === 1 ? '1 reação' : `${n} reações`;
@@ -23,6 +26,7 @@ export default function Ranking({ rows, limit = 50, highlightFirst = false, unit
         return (
           <li key={r.queue_id} className={[first ? 'first' : '', mine?.(r) ? 'mine' : ''].join(' ').trim()}>
             <span className="pos">{first ? '🏆' : i + 1}</span>
+            {photo && <Avatar src={photo(r)} size={36} />}
             <div className="grow">
               <strong>{r.name}</strong>
               <span className="muted small">{r.title}</span>

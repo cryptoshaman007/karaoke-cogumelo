@@ -26,7 +26,9 @@ interface Options {
   tv?: boolean;
 }
 
-const SINGER_COLS = 'id, name, status, created_at';
+const BASE_SINGER_COLS = 'id, name, status, created_at';
+// photo_at comes with database update 006; without it the columns fall back to the basic ones
+let singerCols = `${BASE_SINGER_COLS}, photo_at`;
 const PENDING_WINDOW_MS = 12 * 3600 * 1000;
 const ID_CHUNK = 80;
 const POLL_MS = 20000;
@@ -68,27 +70,34 @@ export function useLive({ admin = false, selfId = null, tv = false }: Options = 
     const ids = [...new Set(rows.map((r) => r.singer_id).concat(selfId ? [selfId] : [], (graded ?? []).map((g) => g.singer_id)))];
 
     // in slices, so a very long queue never produces an address too long for the server
-    const singerQueries = [];
-    for (let i = 0; i < ids.length; i += ID_CHUNK) {
-      singerQueries.push(sb.from('singers').select(SINGER_COLS).in('id', ids.slice(i, i + ID_CHUNK)));
-    }
-    if (admin) {
-      const since = new Date(Date.now() - PENDING_WINDOW_MS).toISOString();
-      singerQueries.push(
-        sb.from('singers').select(SINGER_COLS).eq('status', 'pending').gte('created_at', since).order('created_at').limit(100),
-        sb.from('singers').select(SINGER_COLS).eq('status', 'blocked').order('created_at', { ascending: false }).limit(50),
-      );
-    }
-    const [res, contest] = await Promise.all([
-      Promise.all(singerQueries),
+    const singerQueries = (cols: string) => {
+      const list = [];
+      for (let i = 0; i < ids.length; i += ID_CHUNK) {
+        list.push(sb.from('singers').select(cols).in('id', ids.slice(i, i + ID_CHUNK)));
+      }
+      if (admin) {
+        const since = new Date(Date.now() - PENDING_WINDOW_MS).toISOString();
+        list.push(
+          sb.from('singers').select(cols).eq('status', 'pending').gte('created_at', since).order('created_at').limit(100),
+          sb.from('singers').select(cols).eq('status', 'blocked').order('created_at', { ascending: false }).limit(50),
+        );
+      }
+      return Promise.all(list);
+    };
+    let [res, contest] = await Promise.all([
+      singerQueries(singerCols),
       norm?.results_contest_id
         ? sb.from('contests').select('results').eq('id', norm.results_contest_id).maybeSingle()
         : Promise.resolve(null),
     ]);
+    if (singerCols !== BASE_SINGER_COLS && res.some((r) => r.error?.code === '42703')) {
+      singerCols = BASE_SINGER_COLS;
+      res = await singerQueries(singerCols);
+    }
     if (!alive.current) return;
     if (res.some((r) => r.error)) return;
     const map: Record<string, Singer> = {};
-    for (const r of res) for (const s of (r.data ?? []) as Singer[]) map[s.id] = s;
+    for (const r of res) for (const s of (r.data ?? []) as unknown as Singer[]) map[s.id] = s;
 
     // only touch React state when something really changed
     const qs = JSON.stringify(rows);

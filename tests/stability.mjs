@@ -14,6 +14,7 @@ const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3111';
+const SELFIE = (await import('fs')).readFileSync(new URL('./fixtures-selfie.jpg', import.meta.url));
 const ONLY = process.argv[2] ?? '';
 
 // ---------------------------------------------------------------- fake YouTube player (in the page)
@@ -187,7 +188,10 @@ async function wire(page, b, { admin = true } = {}) {
     } else if (table === 'queue') {
       body = b.queue.filter((q) => ['waiting', 'playing'].includes(q.status)).sort((x, y) => x.position - y.position || x.id - y.id);
     } else if (table === 'settings') body = single ? b.settings : [b.settings];
-    else if (table === 'singers') {
+    else if (table === 'singers' && b.noPhotoColumn && (url.searchParams.get('select') ?? '').includes('photo_at')) {
+      // database without update 006
+      return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: '42703', message: 'column singers.photo_at does not exist' }) });
+    } else if (table === 'singers') {
       const idf = url.searchParams.get('id');
       const st = url.searchParams.get('status');
       if (idf) {
@@ -240,8 +244,24 @@ async function wire(page, b, { admin = true } = {}) {
       return json({ token: 'tok', singer: b.me });
     }
     if (path === '/api/me') return json({ singer: b.me });
+    if (path.startsWith('/api/photo/')) {
+      b.photoLoads = (b.photoLoads ?? 0) + 1;
+      return route.fulfill({ contentType: 'image/jpeg', body: SELFIE });
+    }
+    if (path === '/api/photo') {
+      if (req.method() === 'POST') {
+        b.photoPosts = (b.photoPosts ?? []).concat(String(body.jpeg ?? ''));
+        b.singers[b.me.id].photo_at = new Date().toISOString();
+      } else delete b.singers[b.me.id].photo_at;
+      b.notify('singers');
+      return json({ ok: true });
+    }
     if (path === '/api/search') {
       if (b.searchMode === 'hang') return;
+      const q = new URL(req.url()).searchParams.get('q') ?? '';
+      if (/youtu/.test(q)) {
+        return json({ results: [{ videoId: 'linkAAAAAA1', title: 'Evidências - Chitãozinho e Xororó (clipe oficial)', thumbnail: '', durationSec: 240, channel: 'Canal' }], fromLink: true, karaoke: false });
+      }
       return json({ results: [{ videoId: 'pickAAAAAA1', title: 'Evidências (karaoke)', thumbnail: '', durationSec: 200, channel: 'Canal' }] });
     }
     if (path === '/api/queue' && req.method() === 'GET') {
@@ -1047,6 +1067,100 @@ await test('celular: ranking da noite e figurinha pro telão', async () => {
   await run(page, 1000);
   expect(b.apiCalls.some((c) => c.path === '/api/gif' && c.method === 'POST' && c.body.sticker === 'bis'), 'a figurinha não foi enviada');
   expect((await page.locator('.sheet').count()) === 0, 'a folha de GIFs não fechou');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('selfie: aparece no telão (vez da pessoa, palco e fila) e banco sem a atualização não quebra nada', async () => {
+  const b = makeBackend();
+  b.settings.photos_enabled = true;
+  const ana = b.add('Ana', 'vidAAAAAAA1');
+  b.add('Bia', 'vidBBBBBBB2');
+  b.singers[ana.singer_id].photo_at = new Date().toISOString();
+  b.settings.intermission_sec = 4;
+  const { page, ctx, errors } = await openTv(b);
+  expect((await until(page, async () => (await page.locator('.intro .avatar').count()) === 1, 15000)) >= 0, 'a foto não apareceu na chamada da vez');
+  await shot(page, 'tv-selfie-vez');
+  expect((await until(page, async () => (await yt(page)).state === 1, 20000)) >= 0, 'a música não tocou');
+  expect((await page.locator('.side .now .avatar').count()) === 1, 'sem foto em "No palco agora"');
+  expect((await page.locator('.side .list .avatar').count()) === 0, 'Bia não tem foto e apareceu uma');
+  await ctx.close();
+
+  // same night, database without update 006: the select with photo_at fails, the screen keeps working
+  const old = makeBackend();
+  old.noPhotoColumn = true;
+  old.add('Caio', 'vidCCCCCCC3');
+  const tv = await openTv(old);
+  expect((await until(tv.page, async () => (await yt(tv.page)).videoId === 'vidCCCCCCC3' && (await yt(tv.page)).state === 1, 30000)) >= 0, 'sem a coluna nova o telão não tocou');
+  expect((await tv.page.locator('.side .now').textContent()).includes('Caio'), 'sem o nome de quem canta');
+  expect(errors.length === 0 && tv.errors.length === 0, errors.concat(tv.errors).join('; '));
+  await tv.ctx.close();
+});
+
+await test('celular: tirar selfie manda uma foto pequena, mostra no celular e dá pra apagar', async () => {
+  const b = makeBackend();
+  b.settings.photos_enabled = true;
+  const { page, ctx, errors } = await openPhone(b);
+  expect((await until(page, async () => (await page.getByText('Quer aparecer no telão?').count()) === 1, 5000)) >= 0, 'sem convite pra selfie');
+  await shot(page, 'celular-selfie-convite');
+  await page.locator('.selfie-card input[type=file]').setInputFiles(new URL('./fixtures-selfie.jpg', import.meta.url).pathname);
+  expect((await until(page, async () => (b.photoPosts ?? []).length === 1, 8000, 100)) >= 0, 'a foto não foi enviada');
+  const sent = b.photoPosts[0];
+  expect(sent.startsWith('data:image/jpeg;base64,') && sent.length < 110000, `foto em formato errado (${sent.slice(0, 30)}…, ${sent.length} letras)`);
+  expect((await until(page, async () => (await page.getByText('Sua foto tá no telão').count()) === 1, 5000)) >= 0, 'o celular não mostrou a foto');
+  expect((await page.locator('.topbar .avatar').count()) === 1, 'sem foto ao lado do nome');
+  await shot(page, 'celular-selfie');
+  await page.getByRole('button', { name: 'Apagar minha foto' }).click();
+  expect((await until(page, async () => (await page.getByText('Sua foto tá no telão').count()) === 0, 5000)) >= 0, 'a foto não saiu');
+  expect(b.apiCalls.some((c) => c.path === '/api/photo' && c.method === 'DELETE'), 'não pediu para apagar');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('celular: link do YouTube colado vira o resultado, com aviso quando não parece karaokê', async () => {
+  const b = makeBackend();
+  const { page, ctx, errors } = await openPhone(b);
+  await page.getByRole('searchbox').fill('https://youtu.be/linkAAAAAA1');
+  await page.getByRole('button', { name: 'Buscar' }).click();
+  await run(page, 1000);
+  expect((await page.locator('.results li').count()) === 1, 'o link não virou resultado');
+  expect((await page.getByText('não parece versão karaokê').count()) === 1, 'sem aviso de que não parece karaokê');
+  await shot(page, 'celular-link');
+  await page.getByRole('button', { name: 'Cantar' }).click();
+  expect((await until(page, async () => b.queue.some((q) => q.video_id === 'linkAAAAAA1'), 5000, 100)) >= 0, 'a música do link não entrou na fila');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('celular: depois de cantar, a figurinha com a nota fica pronta pra compartilhar', async () => {
+  const b = makeBackend();
+  Object.assign(b.settings, { ranking_enabled: true, photos_enabled: true, night_started_at: new Date(0).toISOString() });
+  const { page, ctx, errors } = await openPhone(b);
+  b.singers[b.me.id].photo_at = new Date().toISOString();
+  b.queue.push({ id: b.nextId++, singer_id: b.me.id, video_id: 'mineAAAAAA1', title: 'Evidências (Karaokê Version) - Chitãozinho', thumbnail: null, duration_sec: 200, status: 'playing', position: 1, created_at: new Date().toISOString(), started_at: new Date().toISOString() });
+  b.notify('queue');
+  expect((await until(page, async () => (await page.getByText('Você tá no palco').count()) === 1, 5000)) >= 0, 'o celular não viu a pessoa no palco');
+  const mine = b.queue[b.queue.length - 1];
+  Object.assign(mine, { status: 'done', score: 9.3, reaction_count: 11 });
+  b.notify('queue');
+  expect((await until(page, async () => (await page.locator('.sticker-ready').textContent().catch(() => '')).includes('9,3'), 20000)) >= 0, 'a nota não chegou no celular');
+  await shot(page, 'celular-figurinha-pronta');
+  await page.getByRole('button', { name: 'Ver minha figurinha' }).click();
+  expect((await until(page, async () => (await page.locator('.sticker-img').count()) === 1, 8000, 100)) >= 0, 'a figurinha não foi desenhada');
+  const size = await page.locator('.sticker-img').evaluate((img) => [img.naturalWidth, img.naturalHeight].join('x'));
+  expect(size === '1080x1350', `tamanho errado: ${size}`);
+  await shot(page, 'celular-figurinha');
+  if (process.env.SHOTS) {
+    const png = await page.locator('.sticker-img').evaluate(async (img) => {
+      const r = await fetch(img.src);
+      const buf = new Uint8Array(await r.arrayBuffer());
+      let s = '';
+      for (const x of buf) s += String.fromCharCode(x);
+      return btoa(s);
+    });
+    (await import('fs')).writeFileSync(`${process.env.SHOTS}/figurinha.png`, Buffer.from(png, 'base64'));
+  }
+  expect((await page.getByRole('link', { name: 'Salvar imagem' }).count()) === 1, 'sem botão de salvar');
   expect(errors.length === 0, errors.join('; '));
   await ctx.close();
 });
