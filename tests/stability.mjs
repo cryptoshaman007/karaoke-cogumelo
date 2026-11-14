@@ -1609,6 +1609,20 @@ await test('celular: segunda música em destaque e a busca vem antes da fila', a
   await ctx.close();
 });
 
+await test('telão: opção do admin esconde e mostra o "líder da noite"', async () => {
+  const b = makeBackend();
+  Object.assign(b.settings, { ranking_enabled: true, leader_on_tv: true, night_started_at: new Date(0).toISOString() });
+  const done = b.add('Ana', 'vidAAAAAAA1');
+  Object.assign(done, { status: 'done', score: 9.1, vote_count: 7 });
+  const { page, ctx, errors } = await openTv(b);
+  expect((await until(page, async () => (await page.getByText('Líder da noite: Ana').count()) === 1, 5000)) >= 0, 'o líder não apareceu com a opção ligada');
+  b.settings.leader_on_tv = false;
+  b.notify('settings');
+  expect((await until(page, async () => (await page.locator('.tv-message.ranking-on').count()) === 0, 5000)) >= 0, 'o líder continuou com a opção desligada');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
 await browser.close();
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length} de ${results.length} cenários passaram.`);
