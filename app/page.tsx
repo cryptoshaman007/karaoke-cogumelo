@@ -343,16 +343,24 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   // The skip button on this screen. Hammering it skips one song, not several: after a skip it
   // rests for a few seconds (the next singer's countdown is on screen anyway).
   const lastSkip = useRef(0);
-  function skipNow() {
+  // The buttons sit above the "click to turn the sound on" layer (before, that layer swallowed the
+  // click and "Pular" did nothing). Any button click also turns the sound on.
+  async function skipNow() {
+    if (mutedRef.current) unmute();
     const id = playingRef.current?.id ?? null;
     if (id == null || Date.now() - lastSkip.current < 4000) return;
     lastSkip.current = Date.now();
-    void advance('skipped', id);
+    flash('Pulando pra próxima…');
+    if (!(await advance('skipped', id))) {
+      lastSkip.current = 0;
+      if (roleRef.current === 'owner') flash('Não deu pra pular agora. Tenta de novo.');
+    }
   }
 
   // Small controls on the projector itself (same effect as the buttons on the admin phone).
   const [ctrlBusy, setCtrlBusy] = useState(false);
   async function control(body: { paused: boolean } | { restart: true } | { rankingOnTv: boolean }) {
+    if (mutedRef.current) unmute();
     if (ctrlBusy) return;
     setCtrlBusy(true);
     try {
@@ -1226,7 +1234,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             <button aria-label="Voltar ao início da música" title="Voltar ao início da música" disabled={ctrlBusy} onClick={() => control({ restart: true })}>
               <Icon name="restart" size={18} />
             </button>
-            <button aria-label="Pular para a próxima" title="Pular para a próxima" onClick={skipNow}>
+            <button aria-label="Pular para a próxima" title="Pular para a próxima" onClick={() => void skipNow()}>
               <Icon name="skip" size={18} />
             </button>
             <button aria-label="Opções do vídeo" title="Opções do vídeo" aria-expanded={videoMenu} onClick={openVideoMenu}>
@@ -1388,7 +1396,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
               </div>
             )}
             <div className="row">
-              <button className="btn" onClick={skipNow} disabled={!playing}>
+              <button className="btn" onClick={() => void skipNow()} disabled={!playing}>
                 <Icon name="skip" /> Pular música
               </button>
               <button

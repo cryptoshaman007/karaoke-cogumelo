@@ -4,11 +4,11 @@ import { hashToken, singerFromRequest } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
 import { allow } from '@/lib/rate';
 import { gifSearchEnabled, gifUrl, searchGifs } from '@/lib/gifs';
-import { STICKERS } from '@/lib/types';
+import { PRESET_GIFS, presetGifUrl, STICKERS } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-/** GIF search for the phone. `search: false` means only the built-in stickers are available. */
+/** GIF search for the phone. `search: false` means only the stickers and the hand-picked GIFs are available. */
 export async function GET(req: NextRequest) {
   if (!gifSearchEnabled()) return json({ search: false, results: [] });
   let singer;
@@ -43,6 +43,12 @@ export async function POST(req: NextRequest) {
     if (!STICKERS.some((s) => s.key === key)) return fail('Figurinha inválida');
     kind = 'sticker';
     ref = key;
+  } else if (body.preset != null) {
+    // one of the hand-picked GIFs: works without the GIPHY key
+    const id = String(body.preset);
+    if (!PRESET_GIFS.some((g) => g.id === id)) return fail('Esse GIF não pode ir pro telão. Escolhe outro!');
+    kind = 'gif';
+    ref = presetGifUrl(id);
   } else {
     if (!gifSearchEnabled()) return fail('Os GIFs não estão ligados.', 403);
     let url: string | null = null;

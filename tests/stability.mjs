@@ -1482,6 +1482,52 @@ await test('celular: depois de zerar a noite, o "Mandou bem" da noite anterior s
   await ctx.close();
 });
 
+// ---------------------------------------------------------------- correções do teste no Chrome (14/11)
+
+await test('telão tocando sem som (esperando clique): o botão "Pular" pula de verdade', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'vidAAAAAAA1', { duration: 200 });
+  b.add('Bia', 'vidBBBBBBB2', { duration: 200 });
+  const { page, ctx } = await openTv(b);
+  await page.evaluate(() => (window.__yt.dur.vidAAAAAAA1 = 200));
+  await until(page, async () => (await yt(page)).time > 20, 60000);
+  await page.addInitScript(() => {
+    const y = (window.__yt = window.__yt || { players: [], loads: [], behavior: {}, dur: {}, noReady: 0 });
+    y.behavior.vidAAAAAAA1 = 'soundblocked';
+    y.dur.vidAAAAAAA1 = 200;
+    Object.defineProperty(navigator, 'userActivation', { get: () => ({ hasBeenActive: false, isActive: false }) });
+  });
+  await page.reload();
+  await until(page, async () => (await page.locator('.sound-overlay').count()) === 1, 30000);
+  expect((await page.locator('.sound-overlay').count()) === 1, 'não ficou no modo sem som');
+  await page.getByRole('button', { name: 'Pular para a próxima' }).click();
+  await run(page, 1500);
+  expect(b.queue[0].status === 'skipped', `o botão Pular não pulou: ${statuses(b)}`);
+  expect(!(await page.evaluate(() => window.__yt.players.at(-1).muted)), 'o clique no botão não ligou o som');
+  await ctx.close();
+});
+
+await test('celular: GIFs prontos para escolher e mandar, sem busca configurada', async () => {
+  const b = makeBackend();
+  Object.assign(b.settings, { gifs_enabled: true });
+  const { page, ctx, errors } = await openPhone(b);
+  await page.route(/giphy\.com/, (route) => route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==', 'base64') }));
+  b.add('Ana', 'vidAAAAAAA1');
+  b.advance(null, 'done');
+  await run(page, 1500);
+  await page.getByRole('button', { name: 'Mandar GIF ou figurinha pro telão' }).click();
+  await run(page, 800);
+  const n = await page.locator('.gif-grid.presets button').count();
+  expect(n >= 15, `poucos GIFs prontos: ${n}`);
+  await shot(page, 'celular-gifs-prontos');
+  await page.locator('.gif-grid.presets').getByRole('button', { name: 'Palmas', exact: true }).click();
+  await run(page, 1000);
+  expect(b.apiCalls.some((c) => c.path === '/api/gif' && c.method === 'POST' && c.body.preset === 'Rgn6cUfaN5zW'), 'o GIF pronto não foi enviado');
+  expect((await page.locator('.sheet').count()) === 0, 'a folha de GIFs não fechou');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
 await browser.close();
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length} de ${results.length} cenários passaram.`);

@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
 import { getSettings } from '@/lib/supabase-server';
 import { checkAdmin, singerFromRequest } from '@/lib/auth';
-import { KARAOKE_RE, searchKaraoke, videoById } from '@/lib/youtube';
-import { youtubeIdFrom } from '@/lib/song';
+import { searchKaraoke, videoById } from '@/lib/youtube';
+import { looksKaraoke, youtubeIdFrom } from '@/lib/song';
 import { NOT_EMBEDDABLE } from '@/lib/embed';
 import { fail, json } from '@/lib/http';
 import { allow } from '@/lib/rate';
@@ -60,5 +60,5 @@ async function fromLink(videoId: string) {
     return fail(`Esse vídeo é longo demais. Só músicas de até ${Math.floor(max / 60)} minutos.`, 422);
   }
   const { embeddable: _e, live: _l, ...result } = video;
-  return json({ results: [signSong(result)], maxDurationSec: max, fromLink: true, karaoke: KARAOKE_RE.test(video.title) });
+  return json({ results: [signSong(result)], maxDurationSec: max, fromLink: true, karaoke: looksKaraoke(video.title) });
 }

@@ -8,7 +8,7 @@ import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
 import { fmt, get, post, useLive, type ApiError } from '@/lib/useLive';
 import { photoUrl, type SearchResult, type Singer, type Standing } from '@/lib/types';
-import { KARAOKE_RE } from '@/lib/song';
+import { looksKaraoke } from '@/lib/song';
 
 const nameKey = (n: string) => n.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
 
@@ -271,7 +271,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
                 <div className="grow">
                   <strong>
                     {s?.name ?? '…'} {s?.status === 'pending' && <em className="tag">esperando ok</em>}{' '}
-                    {!KARAOKE_RE.test(q.title) && (
+                    {!looksKaraoke(q.title) && (
                       <em className="tag warn-tag" title="O título não parece versão karaokê: pode ter a voz do cantor original">
                         não parece karaokê
                       </em>
