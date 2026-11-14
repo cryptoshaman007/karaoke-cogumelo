@@ -376,6 +376,13 @@ function Panel({ onLogout }: { onLogout: () => void }) {
             {settings.ranking_on_tv && holding && (
               <p className="banner warn">Tem gente esperando pra cantar: o telão fecha o ranking sozinho em 3 minutos.</p>
             )}
+            <label className="switch">
+              <input type="checkbox" checked={settings.leader_on_tv} onChange={(e) => setting({ leaderOnTv: e.target.checked })} />
+              <span>
+                <strong>Mostrar o líder da noite no telão</strong>
+                <span className="muted small">A faixa “⭐ Líder da noite” no canto da tela do karaokê, com o convite pra dar nota.</span>
+              </span>
+            </label>
             <Ranking rows={ranking} limit={10} highlightFirst empty="Ninguém pontuou ainda nessa noite." />
             <button className="btn self-start" disabled={busy} onClick={() => setting({ rankingOnTv: !settings.ranking_on_tv })}>
               {settings.ranking_on_tv ? 'Tirar o ranking do telão' : 'Mostrar o ranking no telão'}

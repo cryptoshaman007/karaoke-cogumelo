@@ -51,6 +51,8 @@ export interface Settings {
   ranking_enabled: boolean;
   /** ranking da noite aberto no telão */
   ranking_on_tv: boolean;
+  /** faixa "líder da noite" no canto do telão (padrão: ligada) */
+  leader_on_tv: boolean;
   /** GIFs e figurinhas enviados pelo celular */
   gifs_enabled: boolean;
   /** quando a noite atual começou (null = banco ainda sem a atualização) */
@@ -81,6 +83,8 @@ export const DEFAULT_SETTINGS: Settings = {
   reactions_enabled: false,
   ranking_enabled: false,
   ranking_on_tv: false,
+  // shown unless the admin turns it off (also before the database has the column)
+  leader_on_tv: true,
   gifs_enabled: false,
   night_started_at: null,
   night_reset_hour: -1,

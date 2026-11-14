@@ -30,6 +30,7 @@ export async function POST(req: NextRequest) {
     if (!patch.ranking_enabled) patch.ranking_on_tv = false;
   }
   if (body.rankingOnTv != null) patch.ranking_on_tv = Boolean(body.rankingOnTv);
+  if (body.leaderOnTv != null) patch.leader_on_tv = Boolean(body.leaderOnTv);
   if (body.gifsEnabled != null) patch.gifs_enabled = Boolean(body.gifsEnabled);
   if (body.photosEnabled != null) patch.photos_enabled = Boolean(body.photosEnabled);
   if (body.nightResetHour !== undefined) {
