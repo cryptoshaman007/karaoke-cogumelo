@@ -169,6 +169,36 @@ export interface GifResult {
 }
 
 /** GIFs only ever come from GIPHY's image servers. Checked on the server and again on the projector. */
+/**
+ * A fixed, hand-picked collection of GIFs (from GIPHY) the phones can send without any search or
+ * key. Only light, family-friendly reactions. A GIF that stops existing on GIPHY just does not show
+ * up on the phone (its preview fails to load) and the projector skips it.
+ */
+export const PRESET_GIFS: { id: string; title: string }[] = [
+  { id: 'Rgn6cUfaN5zW', title: 'Palmas' },
+  { id: 'tODygE8KCqBzy', title: 'Aplausos de pé' },
+  { id: 'gpXfKa9xLAR56', title: 'Caco aplaudindo' },
+  { id: 'MOWPkhRAUbR7i', title: 'Minions comemorando' },
+  { id: 'KXgJsSeOfvSgg', title: 'Minions dançando' },
+  { id: 'MJL5ae814FDTW', title: 'Dancinha' },
+  { id: 'IhOK1ctOFSuI0', title: 'Festa' },
+  { id: 'KL7I5MXrcvezC', title: 'Largou o microfone' },
+  { id: '143qWPF33HtSTK', title: 'Soltando a voz' },
+  { id: 'ni7uQ7e0m4A92', title: 'Karaokê' },
+  { id: 'C5ejiHs5uX627YaH4h', title: 'Chorei de emoção' },
+  { id: 'pynZagVcYxVUk', title: 'Emocionado' },
+  { id: '5VKbvrjxpVJCM', title: 'Uau!' },
+  { id: 'yziuK6WtDFMly', title: 'Saúde!' },
+  { id: 'Yp8GKgfytxQVq', title: 'Um brinde' },
+  { id: 'AHeTfHgVFPHgs', title: 'Pegando fogo' },
+  { id: '3o6wNXC97QJCIqDhfO', title: 'Mais um!' },
+  { id: '8vnPoQw4plhlfSnV8Y', title: 'Torcida' },
+  { id: 'bOXnd3kig533u93OND', title: 'Gatinho feliz' },
+  { id: 's2qXK8wAvkHTO', title: 'Confete' },
+];
+export const presetGifPreview = (id: string) => `https://media.giphy.com/media/${id}/200.gif`;
+export const presetGifUrl = (id: string) => `https://media.giphy.com/media/${id}/giphy.gif`;
+
 export function isGifUrl(url: string): boolean {
   try {
     const u = new URL(url);

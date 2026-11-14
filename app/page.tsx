@@ -116,16 +116,26 @@ const HOLD_AUTOCLOSE_MS = 3 * 60 * 1000;
 // the same tab) and says "I am here" every few seconds; a second screen becomes a mirror.
 const TV_ID_KEY = 'karaoke_tv_id';
 const TV_BEAT_MS = 8000;
-function tvId(): string {
-  try {
-    const saved = sessionStorage.getItem(TV_ID_KEY);
-    if (saved && /^[A-Za-z0-9_-]{8,64}$/.test(saved)) return saved;
-  } catch {}
+// A screen that is a mirror never takes the karaoke by itself. The only exception: the projector
+// itself reopened (Chrome restarted) in its first minutes, while the old screen's lock runs out.
+const TV_FRESH_MS = 2 * 60 * 1000;
+// No answer about who is in charge after this long: play anyway (a projector never waits forever).
+const TV_CHECK_MAX = 6000;
+// Time for another tab with the same id (Chrome "Duplicar aba" copies it) to say so.
+const TV_DUP_WAIT = 400;
+function newTvId(): string {
   const id = `tv${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
   try {
     sessionStorage.setItem(TV_ID_KEY, id);
   } catch {}
   return id;
+}
+function tvId(): string {
+  try {
+    const saved = sessionStorage.getItem(TV_ID_KEY);
+    if (saved && /^[A-Za-z0-9_-]{8,64}$/.test(saved)) return saved;
+  } catch {}
+  return newTvId();
 }
 
 // Survives the screen being rebuilt after an error (same page, sound already allowed).
@@ -169,8 +179,11 @@ export default function TvPage() {
 function Tv({ onLogout }: { onLogout: () => void }) {
   const { queue, singers, settings, results, ranking, loaded, refresh } = useLive({ tv: true });
   const [started, setStarted] = useState(startedOnce);
-  // 'owner' plays the karaoke; 'mirror' is a second screen that only shows the queue
-  const [role, setRole] = useState<'owner' | 'mirror'>('owner');
+  // 'owner' plays the karaoke; 'mirror' is a second screen that only shows the queue; 'checking'
+  // while the first answer about who is in charge has not come (nothing plays meanwhile)
+  const [role, setRole] = useState<'checking' | 'owner' | 'mirror'>('checking');
+  const openedAt = useRef(Date.now());
+  const [mayReclaim, setMayReclaim] = useState(false); // mirror that will take over by itself soon
   const roleRef = useRef(role);
   roleRef.current = role;
   const tvIdRef = useRef('');
@@ -330,16 +343,24 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   // The skip button on this screen. Hammering it skips one song, not several: after a skip it
   // rests for a few seconds (the next singer's countdown is on screen anyway).
   const lastSkip = useRef(0);
-  function skipNow() {
+  // The buttons sit above the "click to turn the sound on" layer (before, that layer swallowed the
+  // click and "Pular" did nothing). Any button click also turns the sound on.
+  async function skipNow() {
+    if (mutedRef.current) unmute();
     const id = playingRef.current?.id ?? null;
     if (id == null || Date.now() - lastSkip.current < 4000) return;
     lastSkip.current = Date.now();
-    void advance('skipped', id);
+    flash('Pulando pra próxima…');
+    if (!(await advance('skipped', id))) {
+      lastSkip.current = 0;
+      if (roleRef.current === 'owner') flash('Não deu pra pular agora. Tenta de novo.');
+    }
   }
 
   // Small controls on the projector itself (same effect as the buttons on the admin phone).
   const [ctrlBusy, setCtrlBusy] = useState(false);
   async function control(body: { paused: boolean } | { restart: true } | { rankingOnTv: boolean }) {
+    if (mutedRef.current) unmute();
     if (ctrlBusy) return;
     setCtrlBusy(true);
     try {
@@ -575,6 +596,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       if (soundTimer.current) clearTimeout(soundTimer.current);
       if (introTimer.current) clearInterval(introTimer.current);
       introTimer.current = null;
+      setIntro(null); // a countdown must not stay frozen on a screen that just became a mirror
       if (noticeTimer.current) clearTimeout(noticeTimer.current);
       try {
         playerRef.current?.destroy?.();
@@ -589,25 +611,59 @@ function Tv({ onLogout }: { onLogout: () => void }) {
 
   // "I am the projector": claimed when the screen opens and renewed every few seconds. Any doubt
   // (no answer, database not updated) keeps this screen playing: only a clear "another screen is in
-  // charge" turns it into a mirror.
+  // charge" turns it into a mirror. A mirror stays a mirror until someone presses "Assumir": it
+  // never takes the karaoke by itself (the projector's internet blinking must not move the music).
   useEffect(() => {
     tvIdRef.current = tvId();
     let stop = false;
+    let beatTimer: ReturnType<typeof setInterval> | undefined;
+    // Chrome's "Duplicar aba" copies the id: the newer tab takes a new one, so there are never two
+    // screens in charge with the same id.
+    const born = Date.now();
+    const inst = Math.random().toString(36).slice(2);
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('karaoke-tv');
+      bc.onmessage = (m) => {
+        const d = m.data as { id?: string; inst?: string; born?: number } | null;
+        if (!d || d.id !== tvIdRef.current || d.inst === inst) return;
+        const older = (d.born ?? 0) < born || (d.born === born && String(d.inst) < inst);
+        if (older) tvIdRef.current = newTvId();
+        else bc?.postMessage({ id: tvIdRef.current, inst, born });
+      };
+      bc.postMessage({ id: tvIdRef.current, inst, born });
+    } catch {}
+    // the projector reopened by itself (it ran the karaoke on this computer before)
+    const mayTakeBack = () => wasStarted() && Date.now() - openedAt.current < TV_FRESH_MS;
     const beat = async () => {
+      const mirror = roleRef.current === 'mirror';
+      const passive = mirror && !mayTakeBack();
       try {
-        const d = await post('/api/tv', { id: tvIdRef.current });
+        const d = await post('/api/tv', { id: tvIdRef.current, ...(passive ? { passive: true } : {}) });
         if (stop) return;
-        if (d?.owner === false) setRole('mirror');
-        else if (d?.owner === true && roleRef.current === 'mirror') setRole('owner'); // the other screen closed
+        if (d?.owner === false) {
+          setRole('mirror');
+          setMayReclaim(mayTakeBack());
+        } else if (d?.owner === true && roleRef.current !== 'owner') setRole('owner');
       } catch (e) {
         if ((e as ApiError).status === 401) onLogout();
       }
     };
-    void beat();
-    const t = setInterval(() => void beat(), TV_BEAT_MS);
+    const first = setTimeout(() => {
+      void beat();
+      beatTimer = setInterval(() => void beat(), TV_BEAT_MS);
+    }, TV_DUP_WAIT);
+    const failOpen = setTimeout(() => {
+      if (!stop && roleRef.current === 'checking') setRole('owner');
+    }, TV_CHECK_MAX);
     return () => {
       stop = true;
-      clearInterval(t);
+      clearTimeout(first);
+      clearTimeout(failOpen);
+      if (beatTimer) clearInterval(beatTimer);
+      try {
+        bc?.close();
+      } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -913,12 +969,27 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const holdingSomeone = (rankingShown || resultsShown) && waiting.length > 0 && isOwner && started;
   useEffect(() => {
     if (!holdingSomeone) return;
-    const t = setTimeout(() => {
+    // straight to the server (not through the buttons, which skip while another tap is running),
+    // and again every 30 s until it really closed (a failed request must not hold the queue)
+    let again: ReturnType<typeof setInterval> | undefined;
+    const close = async () => {
       const s = settingsRef.current;
-      if (s?.results_contest_id != null) void hideResults();
-      else if (s?.ranking_on_tv) void control({ rankingOnTv: false });
+      try {
+        if (s?.results_contest_id != null) await post('/api/admin/contest', { action: 'hide' });
+        else if (s?.ranking_on_tv) await post('/api/admin/settings', { rankingOnTv: false });
+        void refresh();
+      } catch (e) {
+        if ((e as ApiError).status === 401) onLogout();
+      }
+    };
+    const t = setTimeout(() => {
+      void close();
+      again = setInterval(() => void close(), 30000);
     }, HOLD_AUTOCLOSE_MS);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      if (again) clearInterval(again);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [holdingSomeone]);
 
@@ -1163,7 +1234,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             <button aria-label="Voltar ao início da música" title="Voltar ao início da música" disabled={ctrlBusy} onClick={() => control({ restart: true })}>
               <Icon name="restart" size={18} />
             </button>
-            <button aria-label="Pular para a próxima" title="Pular para a próxima" onClick={skipNow}>
+            <button aria-label="Pular para a próxima" title="Pular para a próxima" onClick={() => void skipNow()}>
               <Icon name="skip" size={18} />
             </button>
             <button aria-label="Opções do vídeo" title="Opções do vídeo" aria-expanded={videoMenu} onClick={openVideoMenu}>
@@ -1179,15 +1250,24 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           </button>
         )}
 
-        {!isOwner && (
+        {role === 'mirror' && (
           <div className="mirror-overlay" role="dialog" aria-label="Segundo telão">
             <span className="eyebrow">📺 Segundo telão</span>
-            <h2>Outro telão tá tocando o karaokê</h2>
-            <p>Aqui só mostra a fila, sem vídeo e sem som, pra não cortar a música de ninguém.</p>
+            {mayReclaim ? (
+              <>
+                <h2>Esperando o telão anterior liberar…</h2>
+                <p>Parece que o projetor acabou de reabrir. Em até um minuto esta tela volta a tocar sozinha.</p>
+              </>
+            ) : (
+              <>
+                <h2>Outro telão tá tocando o karaokê</h2>
+                <p>Aqui só mostra a fila, sem vídeo e sem som, pra não cortar a música de ninguém.</p>
+              </>
+            )}
             <button className="btn primary" disabled={takingOver} onClick={() => void takeOver()}>
               {takingOver ? 'Assumindo…' : 'Assumir o telão aqui'}
             </button>
-            <small>Use só se o outro telão desligou ou travou. Ele vira o espelho.</small>
+            <small>Esta tela nunca assume sozinha. Use o botão só se o outro telão desligou ou travou: ele vira o espelho.</small>
           </div>
         )}
 
@@ -1207,14 +1287,16 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           <span className="label">No palco agora</span>
           <span className="with-avatar">
             {playing && <Avatar src={photoOf(playing.singer_id)} seed={playing.singer_id} size={48} />}
-            <strong>{playing ? nowName : '—'}</strong>
+            <strong>{playing ? nowName : loaded ? '—' : '…'}</strong>
           </span>
           {playing && <span className="song">{playing.title}</span>}
         </div>
 
         <div className="list">
           <span className="label">Próximos {waiting.length > 0 && `· ${waiting.length}`}</span>
-          {waiting.length === 0 ? (
+          {!loaded ? (
+            <p className="muted">Carregando a fila…</p>
+          ) : waiting.length === 0 ? (
             <p className="muted">{open ? 'Fila vazia. Bora cantar?' : 'A fila fechou por hoje.'}</p>
           ) : (
             <ol>
@@ -1314,7 +1396,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
               </div>
             )}
             <div className="row">
-              <button className="btn" onClick={skipNow} disabled={!playing}>
+              <button className="btn" onClick={() => void skipNow()} disabled={!playing}>
                 <Icon name="skip" /> Pular música
               </button>
               <button

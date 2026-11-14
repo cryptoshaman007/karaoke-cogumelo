@@ -156,7 +156,25 @@ function Room({ me, token }: { me: Singer; token: string }) {
   // the public read only lists people from tonight, so their own row may not come with the live data.
   const [ownPhotoAt, setOwnPhotoAt] = useState<string | null | undefined>(undefined);
   const listed = singers[me.id];
-  const self = listed ?? (ownPhotoAt === undefined ? me : { ...me, photo_at: ownPhotoAt });
+  // Same reason: while this person's row is not in the live data, their status (approved, refused)
+  // is asked to the server now and then, so a refusal tonight shows without reloading the page.
+  const [meNow, setMeNow] = useState<Singer>(me);
+  const isListed = !!listed;
+  useEffect(() => {
+    if (isListed) return;
+    let stop = false;
+    const t = setInterval(async () => {
+      try {
+        const d = await get('/api/me', { 'x-singer-token': token });
+        if (!stop && d?.singer?.id === me.id) setMeNow((m) => (m.status === d.singer.status && m.name === d.singer.name ? m : { ...m, ...d.singer }));
+      } catch {}
+    }, 45000);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, [isListed, me.id, token]);
+  const self = listed ?? (ownPhotoAt === undefined ? meNow : { ...meNow, photo_at: ownPhotoAt });
   const playing = queue.find((q) => q.status === 'playing') ?? null;
   const line = queue.filter((q) => q.status === 'waiting' && singers[q.singer_id]?.status === 'approved');
   const entry = queue.find((q) => q.singer_id === me.id) ?? null;
@@ -258,7 +276,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
   }
 
   // The song this person just finished: offers the "figurinha" with the crowd's grade.
-  const [lastSong, setLastSong] = useState<{ queueId: number; title: string; at: number; score: number | null } | null>(null);
+  const [lastSong, setLastSong] = useState<{ queueId: number; title: string; at: number; score: number | null; night?: string | null } | null>(null);
   const [sticker, setSticker] = useState<StickerData | null>(null);
   useEffect(() => {
     try {
@@ -273,7 +291,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
     const was = singingRef.current;
     singingRef.current = entry?.status === 'playing' ? { id: entry.id, title: entry.title } : null;
     if (!was || was.id === singingRef.current?.id) return;
-    const song = { queueId: was.id, title: was.title, at: Date.now(), score: null as number | null };
+    const song = { queueId: was.id, title: was.title, at: Date.now(), score: null as number | null, night: settings?.night_started_at ?? null };
     setLastSong(song);
     try {
       localStorage.setItem(LAST_SONG_KEY, JSON.stringify(song));
@@ -310,6 +328,17 @@ function Room({ me, token }: { me: Singer; token: string }) {
       localStorage.removeItem(LAST_SONG_KEY);
     } catch {}
   }
+
+  // "Zerar a noite": last night's grade card and the selfie this phone remembers go away (the
+  // selfie itself was deleted on the server), without waiting for the page to be reloaded.
+  const nightAt = settings?.night_started_at ? Date.parse(settings.night_started_at) : 0;
+  useEffect(() => {
+    if (!nightAt || !Number.isFinite(nightAt)) return;
+    // the night it was sung (compared as text: the phone's clock may be off), or its time for older cards
+    const oldNight = lastSong?.night ? lastSong.night !== settings?.night_started_at : !!lastSong && lastSong.at < nightAt;
+    if (oldNight) forgetLastSong();
+    if (ownPhotoAt && Date.parse(ownPhotoAt) < nightAt) setOwnPhotoAt(null);
+  }, [nightAt, lastSong, ownPhotoAt]);
 
   if (!loaded) return <Loading />;
 

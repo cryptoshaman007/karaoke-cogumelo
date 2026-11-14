@@ -2,6 +2,11 @@ import type { Settings } from './types';
 
 /** Words that mark a karaoke version in a video title. */
 export const KARAOKE_RE = /karaok[eê]|videok[eê]|sing ?along|vers[aã]o karaok/i;
+/**
+ * Titles that say it is the original recording even though "karaokê" is in them (a song called
+ * "Karaokê", an arrocha with "karaokê" in the name...). Those are not karaoke versions.
+ */
+export const NOT_KARAOKE_RE = /clipe oficial|v[ií]deo ?clipe|v[ií]deo oficial|official (music )?video|[aá]udio oficial|official audio|lyric video|visualizer|\bshorts?\b/i;
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{6,20}$/;
 
@@ -65,3 +70,6 @@ export function youtubeIdFrom(input: string): string | null {
   }
   return id && YT_ID.test(id) ? id : null;
 }
+
+/** Looks like a karaoke version (has the word, and does not say it is the original). */
+export const looksKaraoke = (title: string) => KARAOKE_RE.test(title) && !NOT_KARAOKE_RE.test(title);

@@ -20,7 +20,7 @@ async function yt(): Promise<Yt> {
   return ytPromise;
 }
 
-import { KARAOKE_RE } from './song';
+import { KARAOKE_RE, NOT_KARAOKE_RE } from './song';
 export { KARAOKE_RE };
 
 const cache = new Map<string, { at: number; results: SearchResult[] }>();
@@ -72,7 +72,7 @@ export async function searchKaraoke(query: string, maxDurationSec: number): Prom
       seen.add(video.id);
       const title: string = video.title?.text ?? video.title?.toString?.() ?? '';
       const durationSec: number = video.duration?.seconds ?? 0;
-      if (!durationSec || !KARAOKE_RE.test(title)) continue;
+      if (!durationSec || !KARAOKE_RE.test(title) || NOT_KARAOKE_RE.test(title)) continue;
       if (video.is_live || video.is_upcoming) continue;
       results.push({
         videoId: video.id,

@@ -2,9 +2,9 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon from './Icon';
 import { get, post } from '@/lib/useLive';
-import { STICKERS, type GifResult } from '@/lib/types';
+import { PRESET_GIFS, presetGifPreview, STICKERS, type GifResult } from '@/lib/types';
 
-/** Bottom sheet on the phone: pick a sticker or search a GIF to throw on the projector. */
+/** Bottom sheet on the phone: pick a sticker, one of the hand-picked GIFs, or search a GIF to throw on the projector. */
 export default function GifSheet({ token, onClose, onSent }: { token: string; onClose: () => void; onSent: () => void }) {
   const headers = { 'x-singer-token': token };
   const [canSearch, setCanSearch] = useState(false);
@@ -14,6 +14,8 @@ export default function GifSheet({ token, onClose, onSent }: { token: string; on
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState('');
   const reqId = useRef(0);
+  // hand-picked GIFs whose picture did not load (removed from GIPHY, no internet): hidden
+  const [brokenPresets, setBrokenPresets] = useState<string[]>([]);
 
   async function load(term: string) {
     const mine = ++reqId.current;
@@ -37,7 +39,7 @@ export default function GifSheet({ token, onClose, onSent }: { token: string; on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function send(body: { sticker: string } | { gif: string }) {
+  async function send(body: { sticker: string } | { gif: string } | { preset: string }) {
     if (sending) return;
     setSending(true);
     setErr('');
@@ -56,7 +58,7 @@ export default function GifSheet({ token, onClose, onSent }: { token: string; on
 
   return (
     <div className="sheet-back" onClick={onClose}>
-      <div className="sheet" role="dialog" aria-label="Mandar GIF pro telão" onClick={(e) => e.stopPropagation()}>
+      <div className="sheet gif-sheet" role="dialog" aria-label="Mandar GIF pro telão" onClick={(e) => e.stopPropagation()}>
         <div className="sheet-head">
           <strong>Manda no telão</strong>
           <button className="btn ghost small" onClick={onClose}>
@@ -69,6 +71,15 @@ export default function GifSheet({ token, onClose, onSent }: { token: string; on
             <button key={s.key} disabled={sending} onClick={() => send({ sticker: s.key })}>
               <span>{s.emoji}</span>
               {s.text}
+            </button>
+          ))}
+        </div>
+        <span className="muted small">GIFs</span>
+        <div className="gif-grid presets" aria-label="GIFs prontos">
+          {PRESET_GIFS.filter((g) => !brokenPresets.includes(g.id)).map((g) => (
+            <button key={g.id} disabled={sending} aria-label={g.title} title={g.title} onClick={() => send({ preset: g.id })}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={presetGifPreview(g.id)} alt="" loading="lazy" onError={() => setBrokenPresets((b) => (b.includes(g.id) ? b : [...b, g.id]))} />
             </button>
           ))}
         </div>
@@ -96,18 +107,18 @@ export default function GifSheet({ token, onClose, onSent }: { token: string; on
                 {busy ? <span className="spinner" /> : <Icon name="search" />}
               </button>
             </form>
-            {gifs.length === 0 && !busy && <p className="muted small">Nenhum GIF por aqui. Tenta outra palavra.</p>}
+            {gifs.length === 0 && !busy && q.trim() !== '' && <p className="muted small">Nenhum GIF por aqui. Tenta outra palavra.</p>}
             <div className="gif-grid">
               {gifs.map((g) => (
                 <button key={g.id} disabled={sending} aria-label={g.title || 'GIF'} onClick={() => send({ gif: g.id })}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={g.preview} alt="" loading="lazy" />
+                  <img src={g.preview} alt="" loading="lazy" onError={(e) => ((e.currentTarget.parentElement as HTMLElement).style.display = 'none')} />
                 </button>
               ))}
             </div>
-            <span className="muted small">GIFs por GIPHY</span>
           </>
         )}
+        <span className="muted small">GIFs por GIPHY</span>
       </div>
     </div>
   );
