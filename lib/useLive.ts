@@ -231,6 +231,9 @@ export type ApiError = Error & { status?: number };
 
 export const REQUEST_TIMEOUT_MS = 12000;
 
+/** Fired on window when an /api answer says this phone is stopped by "Só Brasil" or the night code. */
+export const GATE_EVENT = 'karaoke-gate';
+
 async function send(method: string, url: string, body: unknown, headers: Record<string, string>) {
   let res: Response;
   try {
@@ -247,6 +250,10 @@ async function send(method: string, url: string, body: unknown, headers: Record<
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    // "Só Brasil" or the night code stopped this phone: the singer's page shows the gate screen
+    if (res.status === 403 && (data.gate === 'geo' || data.gate === 'code') && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(GATE_EVENT, { detail: data.gate }));
+    }
     const err: ApiError = new Error(data.error ?? 'Ops, algo deu errado. Tenta de novo.');
     err.status = res.status;
     throw err;

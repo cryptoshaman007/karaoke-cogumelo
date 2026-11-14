@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { guardPublic } from '@/lib/guard';
 import { db, getSettings, isMissingSchema, promoteReserves } from '@/lib/supabase-server';
 import { singerFromRequest } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
@@ -26,6 +27,8 @@ async function who(req: NextRequest) {
 
 /** The songs this customer left in reserve. */
 export async function GET(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   const { singer, error } = await who(req);
   if (error) return error;
   if (!singer) return fail('Não encontrado', 401);
@@ -40,6 +43,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   const { singer, error: authError } = await who(req);
   if (authError) return authError;
   if (!singer) return fail('Entre com seu nome primeiro', 401);
@@ -100,6 +105,8 @@ export async function POST(req: NextRequest) {
  * the place in line.
  */
 export async function PUT(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   const { singer, error: authError } = await who(req);
   if (authError) return authError;
   if (!singer) return fail('Entre com seu nome primeiro', 401);
@@ -132,6 +139,8 @@ export async function PUT(req: NextRequest) {
  * the queue), or with ?reserve=ID gives up one reserve song.
  */
 export async function DELETE(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   const { singer, error: authError } = await who(req);
   if (authError) return authError;
   if (!singer) return fail('Não encontrado', 401);

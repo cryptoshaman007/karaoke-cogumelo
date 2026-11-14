@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { guardPublic } from '@/lib/guard';
 import { db, getSettings } from '@/lib/supabase-server';
 import { hashToken, newSingerToken } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
@@ -6,6 +7,8 @@ import { allow, clientIp } from '@/lib/rate';
 import { cleanName } from '@/lib/song';
 
 export async function POST(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   const body = await readBody(req);
   const name = cleanName(body.name);
   if (!name) return fail('Diz aí como a gente te chama');

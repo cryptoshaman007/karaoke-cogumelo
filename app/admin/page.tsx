@@ -584,6 +584,15 @@ function Panel({ onLogout }: { onLogout: () => void }) {
         </div>
       </section>
 
+      <SecurityCard
+        onlyBrazil={!!settings.only_brazil}
+        codeAt={settings.night_code_at ?? null}
+        missing={settings.only_brazil === undefined}
+        busy={busy}
+        setting={setting}
+        act={act}
+      />
+
       {withPhoto.length > 0 && (
         <section className="card">
           <h2>
@@ -630,6 +639,92 @@ function Panel({ onLogout }: { onLogout: () => void }) {
         Sair de todos os aparelhos
       </button>
     </main>
+  );
+}
+
+/**
+ * "Segurança": the "Só Brasil" switch and the emergency night code. The code itself is only
+ * readable by the admin, so it is asked to the server whenever it is switched on or changed.
+ */
+function SecurityCard({
+  onlyBrazil,
+  codeAt,
+  missing,
+  busy,
+  setting,
+  act,
+}: {
+  onlyBrazil: boolean;
+  codeAt: string | null;
+  missing: boolean;
+  busy: boolean;
+  setting: (body: unknown) => Promise<boolean>;
+  act: (url: string, body: unknown) => Promise<boolean>;
+}) {
+  const [code, setCode] = useState<string | null>(null);
+  useEffect(() => {
+    if (!codeAt) {
+      setCode(null);
+      return;
+    }
+    get('/api/admin/guard')
+      .then((d) => setCode(typeof d?.code === 'string' ? d.code : null))
+      .catch(() => {});
+  }, [codeAt]);
+
+  function newCode() {
+    const msg = codeAt
+      ? 'Gerar outro código? O código atual para de valer e quem entrou com ele vai precisar escanear o QR do telão de novo.'
+      : 'Ligar o código da noite? O QR das paredes para de valer até você voltar ao normal (ou zerar a noite). Quem já tá no karaokê vai precisar escanear o QR do telão uma vez; ninguém perde o lugar na fila.';
+    if (confirm(msg)) void act('/api/admin/guard', { action: 'new' });
+  }
+
+  return (
+    <section className={`card ${codeAt ? 'attention' : ''}`}>
+      <h2>
+        🛡️ Segurança {(onlyBrazil || codeAt) && <span className="count-pill muted-pill">{codeAt ? 'código ligado' : 'só Brasil'}</span>}
+      </h2>
+      {missing && <p className="muted small">Precisa da atualização do banco (migração 013) pra funcionar.</p>}
+      <label className="switch">
+        <input type="checkbox" checked={onlyBrazil} disabled={missing} onChange={(e) => setting({ onlyBrazil: e.target.checked })} />
+        <span>
+          <strong>Só Brasil</strong>
+          <span className="muted small">
+            Celular de fora do Brasil (ou com VPN de fora) não entra na fila. Você e o telão nunca são bloqueados.
+          </span>
+        </span>
+      </label>
+      <div className="field">
+        <span>Código da noite (emergência)</span>
+        {codeAt ? (
+          <>
+            <span className="code-big">{code ?? '…'}</span>
+            <span className="muted small">
+              Só entra quem escanear o QR do telão (ou digitar esse código). O QR das paredes tá desligado até você voltar ao normal ou
+              zerar a noite.
+            </span>
+            <div className="row">
+              <button className="btn" disabled={busy} onClick={newCode}>
+                Gerar outro
+              </button>
+              <button className="btn primary" disabled={busy} onClick={() => void act('/api/admin/guard', { action: 'off' })}>
+                Voltar ao QR normal
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <span className="muted small">
+              Pra quando entrar bot ou gente de fora pelo QR das paredes: o telão passa a mostrar um QR novo e só ele vale. Fica ligado só
+              nesta noite.
+            </span>
+            <button className="btn self-start" disabled={busy || missing} onClick={newCode}>
+              Gerar código da noite
+            </button>
+          </>
+        )}
+      </div>
+    </section>
   );
 }
 

@@ -1,5 +1,6 @@
 import 'server-only';
 import { db, isMissingSchema } from './supabase-server';
+import { forgetGuardCache } from './guard';
 import type { Settings } from './types';
 
 // "Zerar a noite": the queue of the night before must not be there when the bar opens again.
@@ -26,6 +27,7 @@ export async function autoResetNight(s: Settings): Promise<NightResult> {
   try {
     const { data, error } = await db().rpc('reset_night', { p_auto: true });
     if (error) return 'failed';
+    if (data === 'reset') await endNightCode();
     return (data as NightResult) ?? 'failed';
   } catch {
     return 'failed';
@@ -36,10 +38,22 @@ export async function autoResetNight(s: Settings): Promise<NightResult> {
 export async function resetNightNow(): Promise<void> {
   const sb = db();
   const { error } = await sb.rpc('reset_night', { p_auto: false });
+  await endNightCode();
   if (!error) return;
   if (!isMissingSchema(error)) throw error;
   await sb.from('reserves').delete().gte('id', 0); // ignored if the table does not exist
   const { error: e2 } = await sb.from('queue').update({ status: 'skipped' }).in('status', ['waiting', 'playing']);
   if (e2) throw e2;
   await sb.from('settings').update({ paused: false }).eq('id', 1);
+}
+
+/**
+ * A new night goes back to the printed QR: the emergency code (migration 013) only lasts one night,
+ * so nobody gets locked out the next day because it was left on. Never throws.
+ */
+async function endNightCode(): Promise<void> {
+  try {
+    await db().from('settings').update({ night_code_at: null }).eq('id', 1).not('night_code_at', 'is', null);
+    forgetGuardCache();
+  } catch {}
 }

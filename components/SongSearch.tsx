@@ -1,4 +1,5 @@
 'use client';
+import { GATE_EVENT } from '@/lib/useLive';
 import { useEffect, useRef, useState } from 'react';
 import Icon from './Icon';
 import { fmt } from '@/lib/useLive';
@@ -68,6 +69,7 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
       const res = await fetch(`/api/search?q=${encodeURIComponent(term)}`, { headers: authHeaders, signal: timeoutSignal(24000) });
       const d = await res.json().catch(() => ({}));
       if (mine !== reqId.current) return;
+      if (res.status === 403 && d.gate) window.dispatchEvent(new CustomEvent(GATE_EVENT, { detail: d.gate }));
       if (!res.ok) throw new Error(d.error ?? 'A busca falhou. Tenta de novo.');
       setResults(d.results ?? []);
       if (d.fromLink) setLink({ karaoke: !!d.karaoke });

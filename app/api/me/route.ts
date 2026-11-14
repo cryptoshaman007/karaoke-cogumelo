@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { guardPublic } from '@/lib/guard';
 import { singerFromRequest } from '@/lib/auth';
 import { fail, json } from '@/lib/http';
 
@@ -6,6 +7,8 @@ export const dynamic = 'force-dynamic';
 
 /** Tells the phone who it is. Queue position and the rest come live from Supabase. */
 export async function GET(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   let singer;
   try {
     singer = await singerFromRequest(req);

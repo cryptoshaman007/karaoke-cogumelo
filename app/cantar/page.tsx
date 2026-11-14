@@ -5,7 +5,7 @@ import Ranking from '@/components/Ranking';
 import SongSearch from '@/components/SongSearch';
 import Avatar from '@/components/Avatar';
 import { browserClient } from '@/lib/supabase-browser';
-import { del, get, post, put, useLive } from '@/lib/useLive';
+import { del, GATE_EVENT, get, post, put, useLive, type ApiError } from '@/lib/useLive';
 import { selfieJpeg } from '@/lib/selfie';
 import { cleanSongTitle, drawNightSticker, nightHeadline, STICKER_THEMES } from '@/lib/sticker';
 import { SUGGESTIONS } from '@/lib/suggestions';
@@ -33,6 +33,14 @@ function writeToken(t: string | null) {
 }
 
 export default function SingPage() {
+  return (
+    <Gate>
+      <SingApp />
+    </Gate>
+  );
+}
+
+function SingApp() {
   const [token, setToken] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [me, setMe] = useState<Singer | null>(null);
@@ -84,6 +92,117 @@ export default function SingPage() {
     );
   if (!me) return <Loading />;
   return <Room me={me} token={token} />;
+}
+
+type GateState = { kind: 'checking' } | { kind: 'ok' } | { kind: 'geo' | 'code'; msg: string };
+
+/**
+ * "Só Brasil" and the emergency night code (both switched in the admin). Before the page opens it
+ * asks the server if this phone may come in. A link from the projector's QR carries the night code
+ * (?c=...): it is handed to the server (which keeps it in a cookie) and taken off the address.
+ * If an answer later says the phone was stopped (the code got switched on mid-night), this screen
+ * comes back; the phone keeps its name and place in the queue once it is let in again.
+ */
+function Gate({ children }: { children: React.ReactNode }) {
+  const [state, setState] = useState<GateState>({ kind: 'checking' });
+
+  const check = useCallback(async (code?: string) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const d = code ? await post('/api/gate', { code }) : await get('/api/gate');
+        if (d.gate === 'geo' || d.gate === 'code') setState({ kind: d.gate, msg: d.error ?? '' });
+        else setState({ kind: 'ok' });
+        return;
+      } catch (e) {
+        const status = (e as ApiError).status;
+        // a wrong code from an old QR: just ask for the right one
+        if (code && status && status < 500) {
+          setState({ kind: 'code', msg: (e as Error).message });
+          return;
+        }
+        // trouble reaching the server: never lock anyone out because of it
+        if (attempt >= 1) {
+          setState({ kind: 'ok' });
+          return;
+        }
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    let code = '';
+    try {
+      const url = new URL(window.location.href);
+      code = url.searchParams.get('c') ?? '';
+      if (code) {
+        url.searchParams.delete('c');
+        window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+      }
+    } catch {}
+    void check(code || undefined);
+  }, [check]);
+
+  useEffect(() => {
+    const onGate = () => void check();
+    window.addEventListener(GATE_EVENT, onGate);
+    return () => window.removeEventListener(GATE_EVENT, onGate);
+  }, [check]);
+
+  if (state.kind === 'ok') return <>{children}</>;
+  if (state.kind === 'checking') return <Loading />;
+  return <GateScreen kind={state.kind} msg={state.msg} onCode={(c) => check(c)} onRetry={() => check()} />;
+}
+
+function GateScreen({ kind, msg, onCode, onRetry }: { kind: 'geo' | 'code'; msg: string; onCode: (code: string) => Promise<void>; onRetry: () => Promise<void> }) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const run = async (f: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await f();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <main className="center">
+      <form
+        className="card narrow"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (kind === 'code') void run(() => onCode(code));
+          else void run(onRetry);
+        }}
+      >
+        <div className="brand">
+          <span className="brand-mark">{kind === 'geo' ? '🌎' : '🔑'}</span>
+          <div>
+            <strong>{kind === 'geo' ? 'Só pra quem tá no bar' : 'Código da noite'}</strong>
+            <span className="muted small">Karaokê Cogumelo</span>
+          </div>
+        </div>
+        <p>{msg}</p>
+        {kind === 'code' && (
+          <label className="field">
+            <span>Ou digita o código que aparece embaixo do QR do telão</span>
+            <input
+              className="code-input"
+              placeholder="K7XP4"
+              maxLength={12}
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck={false}
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase())}
+            />
+          </label>
+        )}
+        <button className="btn primary block" disabled={busy || (kind === 'code' && code.trim().length < 3)}>
+          {busy ? 'Conferindo…' : kind === 'code' ? 'Entrar' : 'Tentar de novo'}
+        </button>
+      </form>
+    </main>
+  );
 }
 
 function Loading() {

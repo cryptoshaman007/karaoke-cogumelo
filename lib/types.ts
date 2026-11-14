@@ -67,6 +67,10 @@ export interface Settings {
   photos_enabled: boolean;
   /** usar a extensão do Chrome do telão nos vídeos que só tocam no youtube.com (vazio = banco sem a migração 012) */
   yt_extension?: boolean;
+  /** "Só Brasil": celulares de fora do Brasil não entram (migração 013) */
+  only_brazil?: boolean;
+  /** código de emergência da noite ligado desde (vazio = vale o QR das paredes). O código em si não fica aqui. */
+  night_code_at?: string | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -111,6 +115,10 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
   for (const k of Object.keys(out) as (keyof Settings)[]) {
     if (raw[k] !== undefined && raw[k] !== null) (out as unknown as Record<string, unknown>)[k] = raw[k];
   }
+  // optional columns (left out of DEFAULT_SETTINGS so "missing" stays visible): copied when the database has them
+  if (typeof raw.yt_extension === 'boolean') out.yt_extension = raw.yt_extension;
+  if (typeof raw.only_brazil === 'boolean') out.only_brazil = raw.only_brazil;
+  if (raw.night_code_at !== undefined) out.night_code_at = raw.night_code_at;
   return out;
 }
 

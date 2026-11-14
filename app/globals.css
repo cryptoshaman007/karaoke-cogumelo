@@ -416,3 +416,9 @@ main.phone .searchbar input { font-size: 1.08rem; border: 2px solid rgba(167, 13
 main.phone .searchbar input::placeholder { color: #a9a3c4; }
 main.phone .searchbar input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(167, 139, 250, .25); }
 main.phone .searchbar .btn { min-height: 52px; }
+
+/* código da noite (emergência): na tela do cantor e embaixo do QR do telão */
+.code-input { font-size: 1.6rem; letter-spacing: 0.3em; text-align: center; font-weight: 700; text-transform: uppercase; }
+.qr-code { display: block; line-height: 1.2; margin-top: 6px; text-align: center; font-weight: 800; letter-spacing: 0.25em; color: #111; font-size: 1rem; }
+.qr.big .qr-code { font-size: 1.6rem; }
+.code-big { color: var(--text); font-size: 2rem; font-weight: 800; letter-spacing: 0.3em; }

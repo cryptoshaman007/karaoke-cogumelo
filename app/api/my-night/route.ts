@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { guardPublic } from '@/lib/guard';
 import { db, getSettings } from '@/lib/supabase-server';
 import { singerFromRequest } from '@/lib/auth';
 import { fail, json } from '@/lib/http';
@@ -11,6 +12,8 @@ export const dynamic = 'force-dynamic';
  * grade, then by how many reactions came from other people. Feeds the "figurinha da noite".
  */
 export async function GET(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   let singer;
   try {
     singer = await singerFromRequest(req);

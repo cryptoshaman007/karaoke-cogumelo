@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { guardPublic } from '@/lib/guard';
 import { db, isMissingSchema, NEEDS_MIGRATION } from '@/lib/supabase-server';
 import { hashToken } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
@@ -8,6 +9,8 @@ const KEYS: readonly string[] = REACTIONS.map((r) => r.key);
 
 /** A customer sends a reaction to whoever is singing. It shows up floating on the projector. */
 export async function POST(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   const token = req.headers.get('x-singer-token');
   if (!token || token.length > 100) return fail('Entre com seu nome primeiro', 401);
   const emoji = String((await readBody(req)).emoji ?? '');
