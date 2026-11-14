@@ -8,6 +8,7 @@ import Avatar from '@/components/Avatar';
 import SongSearch from '@/components/SongSearch';
 import { listenInserts, post, useLive, type ApiError } from '@/lib/useLive';
 import { browserClient } from '@/lib/supabase-browser';
+import { closeYtWindow, focusYtWindow, isEmbedBlocked, openYtWindow, readYtMode, saveYtMode, type YtWindowMode } from '@/lib/ytWindow';
 import { fmtScore, isGifUrl, photoUrl, REACTIONS, scorePhrase, STICKERS, type QueueItem, type SearchResult, type Settings } from '@/lib/types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -109,6 +110,10 @@ const PLAYER_READY_TIMEOUT = 20000;
 // Right after a video is loaded the player can still report the previous one ("ended", its
 // time). Nothing is decided from those readings during this moment.
 const LOAD_GRACE = 5000;
+// A video that only plays on youtube.com (in its own window): extra seconds for the page to load
+// before the song's clock is up, and how long a window Chrome blocked waits for a click.
+const YT_WINDOW_LOAD_SEC = 6;
+const YT_WINDOW_BLOCKED_SKIP_MS = 90000;
 // Ranking or contest results on screen hold the queue. With people waiting they close by themselves after this.
 const HOLD_AUTOCLOSE_MS = 3 * 60 * 1000;
 
@@ -229,11 +234,20 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const soundTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mutedRef = useRef(false);
   const loadedAt = useRef(0); // when the player was last told to load a video
+  // The song on screen plays in a youtube.com window (its owner blocked other sites). `offset` +
+  // time since `since` = where the song is; `since` is null while the window is shut (pause, or
+  // Chrome blocked it and the screen waits for a click since `blockedAt`).
+  const ytWin = useRef<{ id: number; videoId: string; win: Window | null; offset: number; since: number | null; endAt: number; blockedAt: number | null } | null>(null);
+  const [ytWinState, setYtWinState] = useState<null | 'open' | 'blocked'>(null);
+  const [ytMode, setYtMode] = useState<YtWindowMode>('page');
+  const ytModeRef = useRef<YtWindowMode>('page');
   const soundTried = useRef<number | null>(null); // queue id whose sound was already retried
 
   useEffect(() => {
     setOrigin(window.location.origin);
     if (wasStarted()) setStarted(true);
+    ytModeRef.current = readYtMode();
+    setYtMode(ytModeRef.current);
     try {
       if (localStorage.getItem(CC_KEY) === '1') setCc(true);
     } catch {}
@@ -393,6 +407,84 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   }
   const canAdd = !!settings?.tv_add_enabled && (settings?.queue_open ?? true);
 
+  /** Where the song in the YouTube window is now, in seconds. */
+  function ytElapsed() {
+    const w = ytWin.current;
+    if (!w) return 0;
+    return w.offset + (w.since != null ? (Date.now() - w.since) / 1000 : 0);
+  }
+
+  /** Opens the YouTube window for the song (again, at the point it was). False when Chrome blocked it. */
+  function ytOpenNow(): boolean {
+    const w = ytWin.current;
+    if (!w) return false;
+    const at = ytElapsed();
+    const win = openYtWindow(holderRef.current, w.videoId, at, ytModeRef.current);
+    w.offset = at;
+    w.win = win;
+    if (!win) {
+      w.since = null;
+      if (w.blockedAt == null) w.blockedAt = Date.now();
+      setYtWinState('blocked');
+      flash('O Chrome bloqueou a janela do YouTube. Clica em "Abrir no YouTube".', true);
+      return false;
+    }
+    w.since = Date.now();
+    w.blockedAt = null;
+    setYtWinState('open');
+    flash('');
+    return true;
+  }
+
+  /** Shuts the window but remembers the point (admin paused, ranking on screen). */
+  function ytPause() {
+    const w = ytWin.current;
+    if (!w || w.since == null) return;
+    w.offset = ytElapsed();
+    w.since = null;
+    closeYtWindow(w.win);
+    w.win = null;
+  }
+
+  /** Done with the YouTube window (song over, skipped, another song). */
+  function ytStop() {
+    const w = ytWin.current;
+    if (!w) return;
+    closeYtWindow(w.win);
+    ytWin.current = null;
+    setYtWinState(null);
+  }
+
+  /** The video refused to play here: play it on youtube.com instead, over the video area. */
+  function playInYtWindow(item: QueueItem, startSeconds: number) {
+    try {
+      playerRef.current?.stopVideo?.();
+    } catch {}
+    const max = settingsRef.current?.max_duration_sec ?? 360;
+    const length = item.duration_sec > 0 ? item.duration_sec + YT_WINDOW_LOAD_SEC : max + 15;
+    closeYtWindow(ytWin.current?.win);
+    ytWin.current = { id: item.id, videoId: item.video_id, win: null, offset: startSeconds, since: null, endAt: Math.min(length, max + 15), blockedAt: null };
+    if (onHold(settingsRef.current)) return void setYtWinState('open'); // opens when the hold ends
+    ytOpenNow();
+  }
+
+  /** Button on the screen: brings the window back in front, or opens it (a click is never blocked). */
+  function ytBringBack() {
+    const w = ytWin.current;
+    if (!w) return;
+    if (w.win && !w.win.closed) return focusYtWindow(w.win);
+    if (!onHold(settingsRef.current)) ytOpenNow();
+  }
+
+  function ytSwitchMode() {
+    const mode: YtWindowMode = ytModeRef.current === 'page' ? 'video' : 'page';
+    ytModeRef.current = mode;
+    setYtMode(mode);
+    saveYtMode(mode);
+    const w = ytWin.current;
+    if (w && w.since != null) ytOpenNow();
+  }
+
   function clearIntro() {
     if (introTimer.current) clearInterval(introTimer.current);
     introTimer.current = null;
@@ -417,6 +509,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     soundTimer.current = setTimeout(() => {
       const pl = playerRef.current;
       if (!pl || loadedVideo.current !== item.id || mutedRef.current || hasUserClicked()) return;
+      if (ytWin.current?.id === item.id) return; // playing in the YouTube window, not here
       if (onHold(settingsRef.current)) return;
       const st = pl.getPlayerState?.();
       if (st !== 1 && st !== 3) goMuted();
@@ -465,6 +558,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     const p = playerRef.current;
     if (!p || !playerReady.current || !nightReadyRef.current) return;
     const cur = playingRef.current;
+    if (ytWin.current && ytWin.current.id !== cur?.id) ytStop();
     if (!cur) {
       if (loadedVideo.current !== null) {
         p.stopVideo?.();
@@ -566,6 +660,12 @@ function Tv({ onLogout }: { onLogout: () => void }) {
               if (!videoStarted.current || loadedVideo.current == null) return;
               // the internet dropped: not the video's fault. The watchdog loads it again later.
               if (!isOnline()) return;
+              // the owner allows it only on youtube.com: play it there, in a window over the video area
+              const cur = playingRef.current;
+              if (isEmbedBlocked(e?.data) && cur && cur.id === loadedVideo.current) {
+                if (ytWin.current?.id !== cur.id) playInYtWindow(cur, health.current.lastTime);
+                return;
+              }
               const h = health.current;
               h.errors += 1;
               // 2 = invalid id, 100 = removed/private, 101/150 = owner blocked embedding: no point retrying.
@@ -605,6 +705,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       playerReady.current = false;
       loadedVideo.current = null;
       videoStarted.current = false;
+      ytStop(); // a rebuilt player opens it again from the saved point
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started, ytControls, isOwner]);
@@ -807,6 +908,11 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   // remote control from the admin phone: pause / resume. Contest results on screen also hold the video.
   const hold = onHold(settings);
   useEffect(() => {
+    if (ytWin.current) {
+      if (hold) ytPause();
+      else if (ytWin.current.since == null && ytWin.current.blockedAt == null) ytOpenNow();
+      return;
+    }
     const p = playerRef.current;
     if (!p || !playerReady.current || !videoStarted.current) return;
     if (hold) p.pauseVideo?.();
@@ -851,6 +957,16 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     const prev = lastRestart.current;
     lastRestart.current = settings.restart_at;
     if (prev === undefined || prev === settings.restart_at) return; // first load, or nothing new
+    const w = ytWin.current;
+    if (w) {
+      writeProgress(null);
+      w.offset = 0;
+      if (w.since != null) {
+        w.since = Date.now();
+        ytOpenNow();
+      }
+      return;
+    }
     const p = playerRef.current;
     if (!p || !playerReady.current || !videoStarted.current) return;
     writeProgress(null);
@@ -859,6 +975,19 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     p.seekTo?.(0, true);
     p.playVideo?.();
   }, [settings?.restart_at, settings]);
+
+  // A click on this screen brings it in front of the YouTube window: send the window back on top.
+  // Closing or reloading this screen closes the window too (it opens again from the saved point).
+  useEffect(() => {
+    const onUp = () => setTimeout(() => focusYtWindow(ytWin.current?.win), 300);
+    const onHide = () => closeYtWindow(ytWin.current?.win);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pagehide', onHide);
+    return () => {
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pagehide', onHide);
+    };
+  }, []);
 
   // Watchdog. Every few seconds: save progress, enforce the time limit, and get the karaoke moving
   // again by itself if anything is stuck (lost request, frozen video, video that never started).
@@ -878,6 +1007,30 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         // someone is waiting but nothing is playing (e.g. a request was lost): try again
         if (waitingRef.current > 0) void advance('done', null);
         return;
+      }
+      // playing in the YouTube window: the song's clock decides when it is over
+      const w = ytWin.current;
+      if (w && w.id === cur.id) {
+        if (onHold(settingsRef.current)) return void ytPause();
+        if (w.since == null) {
+          if (w.blockedAt == null) return void ytOpenNow(); // the hold just ended
+          if (Date.now() - w.blockedAt < YT_WINDOW_BLOCKED_SKIP_MS) return;
+          ytStop();
+          flash('A janela do YouTube não abriu. Vamos pro próximo!');
+          writeProgress(null);
+          return void advance('skipped', cur.id);
+        }
+        if (w.win?.closed) {
+          // someone closed the YouTube window by hand: same as Pular
+          ytStop();
+          writeProgress(null);
+          return void advance('skipped', cur.id);
+        }
+        const at = ytElapsed();
+        if (at < w.endAt) return void writeProgress({ id: cur.id, t: at });
+        ytStop();
+        writeProgress(null);
+        return void advance('done', cur.id);
       }
       const p = playerRef.current;
       if (!p?.getCurrentTime || !playerReady.current || !videoStarted.current || loadedVideo.current !== cur.id) return;
@@ -1043,6 +1196,26 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         <div className={`player-wrap${showVideo ? '' : ' hidden'}${ytControls ? ' interactive' : ''}`}>
           <div className="yt-holder" ref={holderRef} />
         </div>
+
+        {ytWinState && playing && ytWin.current?.id === playing.id && !intro && (
+          <div className="yt-window-card">
+            <span className="eyebrow">Tocando no YouTube</span>
+            <h2>{playing.title}</h2>
+            <p>
+              {ytWinState === 'blocked'
+                ? 'O Chrome bloqueou a janela do YouTube. Clica no botão pra abrir.'
+                : 'Esse vídeo só toca no site do YouTube, então ele abre numa janela aqui por cima.'}
+            </p>
+            <div className="yt-window-actions">
+              <button className="btn primary" onClick={ytBringBack}>
+                {ytWinState === 'blocked' ? 'Abrir no YouTube' : 'Trazer o YouTube pra frente'}
+              </button>
+              <button className="btn ghost" onClick={ytSwitchMode}>
+                {ytMode === 'page' ? 'Mostrar só o vídeo' : 'Mostrar a página do YouTube'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {!playing && (
           <div className="idle">

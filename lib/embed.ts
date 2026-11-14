@@ -26,8 +26,13 @@ async function checkWorks(): Promise<boolean> {
   return ok;
 }
 
-/** False only when YouTube says for sure that this video cannot be embedded. */
+// The projector now plays those videos in a youtube.com window (lib/ytWindow.ts), so they are
+// accepted. BLOCKED_VIDEOS=skip on Vercel goes back to refusing them when the song is chosen.
+export const BLOCKED_VIDEOS_OK = process.env.BLOCKED_VIDEOS !== 'skip';
+
+/** False only when YouTube says for sure that this video cannot be embedded (and those are refused). */
 export async function canEmbed(videoId: string): Promise<boolean> {
+  if (BLOCKED_VIDEOS_OK) return true;
   try {
     if ((await oembedStatus(videoId)) !== 401) return true;
     return !(await checkWorks());

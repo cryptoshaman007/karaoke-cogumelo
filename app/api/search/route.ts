@@ -3,7 +3,7 @@ import { getSettings } from '@/lib/supabase-server';
 import { checkAdmin, singerFromRequest } from '@/lib/auth';
 import { searchKaraoke, videoById } from '@/lib/youtube';
 import { looksKaraoke, youtubeIdFrom } from '@/lib/song';
-import { NOT_EMBEDDABLE } from '@/lib/embed';
+import { BLOCKED_VIDEOS_OK, NOT_EMBEDDABLE } from '@/lib/embed';
 import { fail, json } from '@/lib/http';
 import { allow } from '@/lib/rate';
 import { signSong } from '@/lib/songsig';
@@ -54,7 +54,7 @@ async function fromLink(videoId: string) {
   }
   if (!video) return fail('Não achei esse vídeo. Confere se o link tá certo.', 404);
   if (video.live) return fail('Esse link é de uma live. Escolhe um vídeo normal de karaokê.', 422);
-  if (!video.embeddable) return fail(NOT_EMBEDDABLE, 422);
+  if (!video.embeddable && !BLOCKED_VIDEOS_OK) return fail(NOT_EMBEDDABLE, 422);
   const max = settings.max_duration_sec;
   if (video.durationSec > max) {
     return fail(`Esse vídeo é longo demais. Só músicas de até ${Math.floor(max / 60)} minutos.`, 422);
