@@ -493,16 +493,27 @@ await test('fila normal: três músicas tocam em ordem e o telão volta para a t
   return `${Math.round(t / 1000)} s de karaokê`;
 });
 
-await test('vídeo bloqueado para embed: pula sozinho e avisa', async () => {
+await test('vídeo bloqueado para embed: abre no youtube.com, espera o "Terminou" e só então segue', async () => {
   const b = makeBackend();
   b.add('Ana', 'blockedAAA1');
   b.add('Bia', 'vidBBBBBBB2');
   const { page, ctx } = await openTv(b);
+  // the real youtube.com cuts the link to the window (COOP): the projector then reads win.closed = true
+  await ctx.route(/https:\/\/www\.youtube\.com\/watch/, (route) =>
+    route.fulfill({ contentType: 'text/html', headers: { 'cross-origin-opener-policy': 'same-origin-allow-popups' }, body: '<p>YT</p>' }),
+  );
+  const popups = [];
+  ctx.on('page', (p) => popups.push(p));
   await page.evaluate(() => (window.__yt.behavior.blockedAAA1 = 'error150'));
-  const t = await until(page, async () => b.queue[1].status === 'playing', 30000);
-  expect(t >= 0, `não passou para a próxima: ${statuses(b)}`);
-  expect(b.queue[0].status === 'skipped', 'a bloqueada deveria ficar como pulada');
-  expect((await page.locator('.toast').textContent())?.includes('não quis tocar'), 'sem aviso no telão');
+  const t = await until(page, async () => popups.some((p) => p.url().includes('blockedAAA1')), 30000);
+  expect(t >= 0, 'não abriu a janela do YouTube');
+  await run(page, 60000);
+  expect(b.queue[0].status === 'playing' && b.queue[1].status === 'waiting', `a fila andou sozinha: ${statuses(b)}`);
+  expect(popups.length === 1, `abriu ${popups.length} janelas do YouTube`);
+  await page.getByRole('button', { name: /Terminou/ }).click();
+  const t2 = await until(page, async () => b.queue[1].status === 'playing', 20000);
+  expect(t2 >= 0, `"Terminou" não passou para a próxima: ${statuses(b)}`);
+  expect(b.queue[0].status === 'done', 'a do YouTube deveria ficar como cantada');
   await ctx.close();
 });
 

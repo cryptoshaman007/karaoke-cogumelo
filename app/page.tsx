@@ -110,9 +110,11 @@ const PLAYER_READY_TIMEOUT = 20000;
 // Right after a video is loaded the player can still report the previous one ("ended", its
 // time). Nothing is decided from those readings during this moment.
 const LOAD_GRACE = 5000;
-// A video that only plays on youtube.com (in its own window): extra seconds for the page to load
-// before the song's clock is up, and how long a window Chrome blocked waits for a click.
-const YT_WINDOW_LOAD_SEC = 6;
+// A video that only plays on youtube.com (in its own window). The projector cannot see that window
+// (nor know when it closes), and the video there may be paused or restarted by hand, so the next
+// song waits for someone to press "Terminou" (or Pular). Only as a safety net, if nobody does, the
+// queue moves this long after the video's length.
+const YT_WINDOW_SAFETY_SEC = 10 * 60;
 const YT_WINDOW_BLOCKED_SKIP_MS = 90000;
 // Ranking or contest results on screen hold the queue. With people waiting they close by themselves after this.
 const HOLD_AUTOCLOSE_MS = 3 * 60 * 1000;
@@ -417,7 +419,9 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   /** Opens the YouTube window for the song (again, at the point it was). False when Chrome blocked it. */
   function ytOpenNow(): boolean {
     const w = ytWin.current;
-    if (!w) return false;
+    // Once YouTube loads, Chrome cuts this page's link to the window (YouTube asks for that), so it
+    // can no longer be closed or reused from here: opening again would play the song twice.
+    if (!w || w.win) return false;
     const at = ytElapsed();
     const win = openYtWindow(holderRef.current, w.videoId, at, ytModeRef.current);
     w.offset = at;
@@ -436,16 +440,6 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     return true;
   }
 
-  /** Shuts the window but remembers the point (admin paused, ranking on screen). */
-  function ytPause() {
-    const w = ytWin.current;
-    if (!w || w.since == null) return;
-    w.offset = ytElapsed();
-    w.since = null;
-    closeYtWindow(w.win);
-    w.win = null;
-  }
-
   /** Done with the YouTube window (song over, skipped, another song). */
   function ytStop() {
     const w = ytWin.current;
@@ -461,28 +455,33 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       playerRef.current?.stopVideo?.();
     } catch {}
     const max = settingsRef.current?.max_duration_sec ?? 360;
-    const length = item.duration_sec > 0 ? item.duration_sec + YT_WINDOW_LOAD_SEC : max + 15;
+    const length = (item.duration_sec > 0 ? item.duration_sec : max) + YT_WINDOW_SAFETY_SEC;
     closeYtWindow(ytWin.current?.win);
-    ytWin.current = { id: item.id, videoId: item.video_id, win: null, offset: startSeconds, since: null, endAt: Math.min(length, max + 15), blockedAt: null };
+    ytWin.current = { id: item.id, videoId: item.video_id, win: null, offset: startSeconds, since: null, endAt: length, blockedAt: null };
     if (onHold(settingsRef.current)) return void setYtWinState('open'); // opens when the hold ends
     ytOpenNow();
   }
 
-  /** Button on the screen: brings the window back in front, or opens it (a click is never blocked). */
-  function ytBringBack() {
+  /** "Terminou" on the screen: the singer is done (the YouTube window was closed by hand). */
+  async function ytFinished() {
     const w = ytWin.current;
-    if (!w) return;
-    if (w.win && !w.win.closed) return focusYtWindow(w.win);
-    if (!onHold(settingsRef.current)) ytOpenNow();
+    if (!w || playingRef.current?.id !== w.id) return;
+    ytStop();
+    writeProgress(null);
+    flash('Bora pra próxima!');
+    await advance('done', w.id);
+  }
+
+  /** Button on the screen when Chrome blocked the window: opens it (a click is never blocked). */
+  function ytBringBack() {
+    if (ytWin.current && !ytWin.current.win) ytOpenNow();
   }
 
   function ytSwitchMode() {
     const mode: YtWindowMode = ytModeRef.current === 'page' ? 'video' : 'page';
     ytModeRef.current = mode;
     setYtMode(mode);
-    saveYtMode(mode);
-    const w = ytWin.current;
-    if (w && w.since != null) ytOpenNow();
+    saveYtMode(mode); // used from the next window on
   }
 
   function clearIntro() {
@@ -705,7 +704,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       playerReady.current = false;
       loadedVideo.current = null;
       videoStarted.current = false;
-      ytStop(); // a rebuilt player opens it again from the saved point
+      // the YouTube window is left alone: a rebuilt player must not open it a second time
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started, ytControls, isOwner]);
@@ -909,8 +908,8 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const hold = onHold(settings);
   useEffect(() => {
     if (ytWin.current) {
-      if (hold) ytPause();
-      else if (ytWin.current.since == null && ytWin.current.blockedAt == null) ytOpenNow();
+      // the window cannot be paused from here: only one that waited for the hold opens now
+      if (!hold && !ytWin.current.win && ytWin.current.blockedAt == null) ytOpenNow();
       return;
     }
     const p = playerRef.current;
@@ -957,16 +956,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     const prev = lastRestart.current;
     lastRestart.current = settings.restart_at;
     if (prev === undefined || prev === settings.restart_at) return; // first load, or nothing new
-    const w = ytWin.current;
-    if (w) {
-      writeProgress(null);
-      w.offset = 0;
-      if (w.since != null) {
-        w.since = Date.now();
-        ytOpenNow();
-      }
-      return;
-    }
+    if (ytWin.current) return; // the YouTube window cannot be restarted from here
     const p = playerRef.current;
     if (!p || !playerReady.current || !videoStarted.current) return;
     writeProgress(null);
@@ -1011,21 +1001,15 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       // playing in the YouTube window: the song's clock decides when it is over
       const w = ytWin.current;
       if (w && w.id === cur.id) {
-        if (onHold(settingsRef.current)) return void ytPause();
         if (w.since == null) {
-          if (w.blockedAt == null) return void ytOpenNow(); // the hold just ended
+          if (w.blockedAt == null) return void (onHold(settingsRef.current) || ytOpenNow()); // waited for a hold
           if (Date.now() - w.blockedAt < YT_WINDOW_BLOCKED_SKIP_MS) return;
           ytStop();
           flash('A janela do YouTube não abriu. Vamos pro próximo!');
           writeProgress(null);
           return void advance('skipped', cur.id);
         }
-        if (w.win?.closed) {
-          // someone closed the YouTube window by hand: same as Pular
-          ytStop();
-          writeProgress(null);
-          return void advance('skipped', cur.id);
-        }
+        // never trust w.win.closed: Chrome reports the window as closed as soon as YouTube loads
         const at = ytElapsed();
         if (at < w.endAt) return void writeProgress({ id: cur.id, t: at });
         ytStop();
@@ -1204,14 +1188,20 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             <p>
               {ytWinState === 'blocked'
                 ? 'O Chrome bloqueou a janela do YouTube. Clica no botão pra abrir.'
-                : 'Esse vídeo só toca no site do YouTube, então ele abre numa janela aqui por cima.'}
+                : 'Esse vídeo só toca no site do YouTube, numa janela aqui por cima. Quando acabar, feche a janela do YouTube (Alt+F4) e clique em Terminou.'}
             </p>
             <div className="yt-window-actions">
-              <button className="btn primary" onClick={ytBringBack}>
-                {ytWinState === 'blocked' ? 'Abrir no YouTube' : 'Trazer o YouTube pra frente'}
-              </button>
+              {ytWinState === 'blocked' ? (
+                <button className="btn primary" onClick={ytBringBack}>
+                  Abrir no YouTube
+                </button>
+              ) : (
+                <button className="btn primary" onClick={() => void ytFinished()}>
+                  Terminou, próxima música
+                </button>
+              )}
               <button className="btn ghost" onClick={ytSwitchMode}>
-                {ytMode === 'page' ? 'Mostrar só o vídeo' : 'Mostrar a página do YouTube'}
+                {ytMode === 'page' ? 'Próximas: só o vídeo' : 'Próximas: página do YouTube'}
               </button>
             </div>
           </div>
