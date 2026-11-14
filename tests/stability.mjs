@@ -1786,7 +1786,7 @@ await test('celular: busca do YouTube fora do ar mostra as já cantadas no bar c
   await ctx.close();
 });
 
-await test('extensão abre a janela mas o vídeo nunca começa: pula sozinho, sem travar a noite', async () => {
+await test('extensão abre a janela mas o vídeo nunca começa: avisa e só segue quando fecham a janela', async () => {
   const b = makeBackend();
   b.add('Ana', 'blockedAAA1');
   b.add('Bia', 'vidBBBBBBB2');
@@ -1806,19 +1806,19 @@ await test('extensão abre a janela mas o vídeo nunca começa: pula sozinho, se
   await page.evaluate(() => (window.__yt.behavior.blockedAAA1 = 'error150'));
   expect((await until(page, async () => (await page.evaluate(() => window.__ext.opens.length)) > 0, 30000)) >= 0, 'não pediu pra extensão abrir');
   const q = await page.evaluate(() => window.__ext.opens[0].queueId);
-  // the YouTube page is there (status every second) but the clock never leaves zero
-  let moved = -1;
-  for (let i = 1; i <= 200 && moved < 0; i++) {
+  // the YouTube page is there (status every second) but the clock never leaves zero, for 15 minutes
+  for (let i = 1; i <= 900; i++) {
     await page.evaluate((id) => window.__extSay({ type: 'status', queueId: id, time: 0, duration: 0, paused: true, ad: false }), q);
-    await run(page, 1000);
-    if (b.queue[1].status === 'playing') moved = i;
+    await run(page, 1000, 1000);
   }
-  expect(moved > 60, `pulou cedo demais (${moved} s)`);
-  expect(moved > 0, `ficou parado esperando um vídeo que nunca começou: ${statuses(b)}`);
-  expect(b.queue[0].status === 'skipped', 'a que não tocou deveria ficar como pulada');
-  expect((await page.evaluate(() => window.__ext.closes)) > 0, 'não mandou a extensão fechar a janela');
+  expect(b.queue[0].status === 'playing', `seguiu pra próxima com a janela ainda aberta: ${statuses(b)}`);
+  expect((await page.getByText(/não começou no YouTube/).count()) === 1, 'não avisou pra fechar a janela');
+  expect((await page.evaluate(() => window.__ext.closes)) === 0, 'fechou a janela sozinho');
+  // the person closes the YouTube window: the queue moves
+  await page.evaluate((id) => window.__extSay({ type: 'closed', queueId: id }), q);
+  const t = await until(page, async () => b.queue[1].status === 'playing', 20000);
+  expect(t >= 0, `fechar a janela não passou pra próxima: ${statuses(b)}`);
   await ctx.close();
-  return `pulou em ${moved} s`;
 });
 
 await browser.close();

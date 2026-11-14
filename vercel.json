@@ -1,3 +1,4 @@
 {
+  "regions": ["gru1"],
   "crons": [{ "path": "/api/keepalive", "schedule": "0 15 * * *" }]
 }

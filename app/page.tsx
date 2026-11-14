@@ -119,8 +119,9 @@ const YT_WINDOW_SAFETY_SEC = 10 * 60;
 // With the Chrome extension: no news from it for this long = it stopped working, use the manual way.
 const YT_EXT_SILENT_MS = 25000;
 const YT_WINDOW_BLOCKED_SKIP_MS = 90000;
-// The extension's YouTube window is open but the video never started (only counted while not paused).
-const YT_EXT_NOSTART_SKIP_MS = 120000;
+// The extension's YouTube window is open but the video never started (only counted while not paused):
+// after this long the screen asks the person at the projector to close it.
+const YT_EXT_NOSTART_WARN_MS = 60000;
 // Ranking or contest results on screen hold the queue. With people waiting they close by themselves after this.
 const HOLD_AUTOCLOSE_MS = 3 * 60 * 1000;
 
@@ -545,7 +546,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         w.extAt = Date.now();
         if (m.type === 'status') {
           if (!m.ad && m.time > 0) {
-            if (!w.extStatus) deadSkips.current = 0;
+            if (!w.extStatus && w.notStartedMs >= YT_EXT_NOSTART_WARN_MS) flash('');
             w.extStatus = true;
             w.offset = m.time;
             w.since = m.paused ? null : Date.now();
@@ -1098,22 +1099,16 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           return;
         }
         // The extension's window is open but the video never started there (age check, "video
-        // unavailable", a page that did not load...): skip it, as with any video that never starts.
-        // Several in a row means the problem is the computer or the internet: then keep waiting.
-        if (w.viaExt && !w.extStatus && !onHold(settingsRef.current) && isOnline()) {
+        // unavailable", a page that did not load...). The next song never starts over an open
+        // window: the person at the projector closes it (the queue then moves by itself) or presses
+        // "Pular". The screen just says so.
+        if (w.viaExt && !w.extStatus) {
+          if (onHold(settingsRef.current) || !isOnline()) return;
           w.notStartedMs += TICK;
-          if (w.notStartedMs >= YT_EXT_NOSTART_SKIP_MS) {
-            w.notStartedMs = 0;
-            if (deadSkips.current >= MAX_DEAD_SKIPS) {
-              flash('O YouTube não tá abrindo os vídeos. Dá uma olhada na internet do computador, ou aperta "Pular".', true);
-              return;
-            }
-            deadSkips.current += 1;
-            ytStop();
-            flash('Esse vídeo não começou no YouTube. Vamos pro próximo!');
-            writeProgress(null);
-            return void advance('skipped', cur.id, false);
+          if (w.notStartedMs >= YT_EXT_NOSTART_WARN_MS && w.notStartedMs - TICK < YT_EXT_NOSTART_WARN_MS) {
+            flash('O vídeo não começou no YouTube. Resolve na janela, ou fecha ela (ou aperta "Pular") pra ir pra próxima.', true);
           }
+          return; // never started: the time limit does not apply, the window stays until someone closes it
         }
         if (w.viaExt && w.since == null) return; // paused in the YouTube window
         if (w.since == null) {
