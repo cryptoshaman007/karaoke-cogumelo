@@ -51,12 +51,12 @@ function clockSeconds(text: string): number {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function readItem(node: any): (SearchResult & { live: boolean }) | null {
-  if (node?.type === 'Video' && node.id) {
+  if ((node?.type === 'Video' || node?.type === 'CompactVideo' || node?.type === 'GridVideo') && node.id) {
     return {
       videoId: node.id,
       title: node.title?.text ?? node.title?.toString?.() ?? '',
       thumbnail: `https://i.ytimg.com/vi/${node.id}/mqdefault.jpg`,
-      durationSec: node.duration?.seconds ?? 0,
+      durationSec: node.duration?.seconds ?? clockSeconds(String(node.duration?.text ?? node.duration ?? '')),
       channel: node.author?.name ?? '',
       live: !!(node.is_live || node.is_upcoming),
     };
@@ -81,6 +81,24 @@ function readItem(node: any): (SearchResult & { live: boolean }) | null {
   return null;
 }
 
+/** One search, read into songs. `readable` = how many results this code could read at all. */
+async function readSearch(term: string) {
+  const res = await searchOnce(term);
+  const seen = new Set<string>();
+  const results: SearchResult[] = [];
+  for (const v of res.videos) {
+    const item = readItem(v);
+    if (!item || seen.has(item.videoId)) continue;
+    seen.add(item.videoId);
+    const { live, ...song } = item;
+    if (live || !song.durationSec || !KARAOKE_RE.test(song.title) || NOT_KARAOKE_RE.test(song.title)) continue;
+    results.push(song);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const types = [...new Set(((res as any).results ?? []).map((r: { type?: string }) => r?.type))].slice(0, 5);
+  return { results, readable: seen.size, types };
+}
+
 export async function searchKaraoke(query: string, maxDurationSec: number): Promise<SearchResult[]> {
   const q = query.trim().toLowerCase();
   const key = q;
@@ -90,38 +108,34 @@ export async function searchKaraoke(query: string, maxDurationSec: number): Prom
     results = hit.results;
   } else {
     const term = KARAOKE_RE.test(q) ? q : `${q} karaoke`;
-    let res;
     const startedAt = Date.now();
+    let read;
     try {
-      res = await searchOnce(term);
+      read = await readSearch(term);
+      // Nothing readable at all (a layout this code does not know yet, or an odd answer): the
+      // layout sticks to the session, so ask again right away with a brand-new one.
+      if (!read.readable && Date.now() - startedAt < 9000) {
+        console.error('search: nothing readable, trying a new session', read.types);
+        ytPromise = null;
+        read = await readSearch(term);
+        if (!read.readable) {
+          console.error('search: still nothing readable', read.types);
+          ytPromise = null;
+        }
+      }
     } catch (first) {
       console.error('search failed', first);
       try {
         // one more try with a new session, unless the person has already waited too long
         if (Date.now() - startedAt > 9000) throw first;
-        res = await searchOnce(term);
+        read = await readSearch(term);
       } catch (e) {
         // YouTube is not answering: an old answer for the same search is better than an error
         if (hit) return hit.results.filter((r) => r.durationSec <= maxDurationSec);
         throw e;
       }
     }
-    const seen = new Set<string>();
-    results = [];
-    for (const v of res.videos) {
-      const item = readItem(v);
-      if (!item || seen.has(item.videoId)) continue;
-      seen.add(item.videoId);
-      const { live, ...song } = item;
-      if (live || !song.durationSec || !KARAOKE_RE.test(song.title) || NOT_KARAOKE_RE.test(song.title)) continue;
-      results.push(song);
-    }
-    if (res.videos.length && !seen.size) {
-      // YouTube answered in a layout this code cannot read: say so in the logs, and start a fresh
-      // session next time instead of answering "nothing found" to every search on this server
-      console.error('search: unknown result layout', res.videos.slice(0, 3).map((v) => (v as { type?: string }).type));
-      ytPromise = null;
-    }
+    results = read.results;
     // an empty answer is not remembered: it may just be a hiccup
     if (results.length) {
       cache.set(key, { at: Date.now(), results });
