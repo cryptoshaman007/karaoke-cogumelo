@@ -277,7 +277,15 @@ async function wire(page, b, { admin = true } = {}) {
       b.notify('settings');
       return json({ ok: true });
     }
-    if (path === '/api/popular') return json({ songs: [] });
+    if (path === '/api/popular') return json({ songs: b.popular ?? [] });
+    if (path === '/api/my-night') {
+      b.nightLoads = (b.nightLoads ?? 0) + 1;
+      const songs = b.queue
+        .filter((q) => q.singer_id === b.me?.id && ['done', 'skipped'].includes(q.status))
+        .map((q) => ({ id: q.id, title: q.title, score: q.score ?? null, votes: q.vote_count ?? 0, reactions: q.reactions ?? 0 }))
+        .sort((x, y) => (y.score ?? -1) - (x.score ?? -1) || y.reactions - x.reactions || y.id - x.id);
+      return json({ songs, total: songs.length });
+    }
     if (path === '/api/gif') return json(req.method() === 'GET' ? { search: false, results: [] } : { ok: true });
     if (path === '/api/join') {
       const sid = `00000000-0000-4000-9000-${String(b.nextId++).padStart(12, '0')}`;
@@ -1315,7 +1323,7 @@ await test('celular: depois de cantar, a figurinha com a nota fica pronta pra co
   b.notify('queue');
   expect((await until(page, async () => (await page.locator('.sticker-ready').textContent().catch(() => '')).includes('9,3'), 20000)) >= 0, 'a nota não chegou no celular');
   await shot(page, 'celular-figurinha-pronta');
-  await page.getByRole('button', { name: 'Ver minha figurinha' }).click();
+  await page.getByRole('button', { name: 'Ver minha figurinha', exact: true }).click();
   expect((await until(page, async () => (await page.locator('.sticker-img').count()) === 1, 8000, 100)) >= 0, 'a figurinha não foi desenhada');
   const size = await page.locator('.sticker-img').evaluate((img) => [img.naturalWidth, img.naturalHeight].join('x'));
   expect(size === '1080x1350', `tamanho errado: ${size}`);
@@ -1331,6 +1339,59 @@ await test('celular: depois de cantar, a figurinha com a nota fica pronta pra co
     (await import('fs')).writeFileSync(`${process.env.SHOTS}/figurinha.png`, Buffer.from(png, 'base64'));
   }
   expect((await page.getByRole('link', { name: 'Salvar imagem' }).count()) === 1, 'sem botão de salvar');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('celular: figurinha da noite com as 3 melhores, mais cantadas com "Ver mais" e sugestões por estilo', async () => {
+  const b = makeBackend();
+  b.popular = Array.from({ length: 9 }, (_, i) => ({ videoId: `popAAAAAA${i}0`.slice(0, 11), title: `Popular ${i + 1} (karaoke)`, thumbnail: '', durationSec: 200, channel: '', count: 9 - i }));
+  Object.assign(b.settings, { ranking_enabled: true, night_started_at: new Date(0).toISOString() });
+  const { page, ctx, errors } = await openPhone(b);
+  expect((await page.getByPlaceholder('Música, artista ou link YT').count()) === 1, 'placeholder da busca não mudou');
+  await run(page, 500);
+  expect((await page.locator('.results li').count()) === 4, `mostrou ${await page.locator('.results li').count()} mais cantadas em vez de 4`);
+  await page.getByRole('button', { name: /Ver mais/ }).click();
+  expect((await page.locator('.results li').count()) === 9, 'o "Ver mais" não abriu o resto');
+  expect((await page.getByText('Canta uma e ela aparece aqui').count()) === 1, 'sem o aviso da figurinha antes de cantar');
+  // sugestões: o card fica por último e preenche a busca
+  const last = await page.locator('main.phone > section').last().getAttribute('class');
+  expect(/suggestions/.test(last ?? ''), `o último card é "${last}", não as sugestões`);
+  await page.getByRole('tab', { name: /Sertanejo/ }).click();
+  expect((await page.locator('.sugg-list li').count()) === 6, 'a categoria não mostrou 6 músicas');
+  await page.locator('.sugg-list li').first().getByRole('button', { name: 'Achar' }).click();
+  await run(page, 1000);
+  expect(b.apiCalls.some((c) => c.path === '/api/search'), 'a sugestão não buscou');
+  expect((await page.getByRole('searchbox').inputValue()).includes('Henrique'), 'a busca não foi preenchida');
+  await shot(page, 'celular-sugestoes');
+  // 4 músicas cantadas: a figurinha mostra as 3 melhores (nota, depois reações)
+  const songs = [['Garçom (karaoke)', 7.1, 3], ['Evidências (Karaokê Version)', 9.4, 2], ['Tempo Perdido karaoke', null, 14], ['Infiel - Marília Mendonça (karaoke)', 8.2, 0]];
+  for (const [title, score, reactions] of songs)
+    b.queue.push({ id: b.nextId++, singer_id: b.me.id, video_id: 'nightAAAAA1', title, thumbnail: null, duration_sec: 200, status: 'done', position: 1, created_at: new Date().toISOString(), started_at: new Date().toISOString(), score, reactions });
+  b.notify('queue');
+  await page.clock.runFor(125000);
+  await run(page, 1000);
+  const top = await page.locator('.night-top li').allTextContents();
+  expect(top.length === 3, `a figurinha mostra ${top.length} músicas`);
+  expect(top[0].includes('Evidências') && top[0].includes('9,4') && top[1].includes('Infiel') && top[2].includes('Garçom'), `ordem errada: ${top.join(' | ')}`);
+  expect((await page.getByText('e mais 1 na conta').count()) === 1, 'sem o "e mais 1"');
+  await shot(page, 'celular-figurinha-noite-card');
+  await page.getByRole('button', { name: 'Ver e compartilhar' }).click();
+  expect((await until(page, async () => (await page.locator('.sticker-img').count()) === 1, 8000, 100)) >= 0, 'a figurinha da noite não foi desenhada');
+  const src1 = await page.locator('.sticker-img').getAttribute('src');
+  await page.getByRole('button', { name: /Trocar a cor/ }).click();
+  expect((await until(page, async () => (await page.locator('.sticker-img').getAttribute('src')) !== src1, 8000, 100)) >= 0, 'trocar a cor não redesenhou');
+  await shot(page, 'celular-figurinha-noite');
+  if (process.env.SHOTS) {
+    const png = await page.locator('.sticker-img').evaluate(async (img) => {
+      const r = await fetch(img.src);
+      const buf = new Uint8Array(await r.arrayBuffer());
+      let s = '';
+      for (const x of buf) s += String.fromCharCode(x);
+      return btoa(s);
+    });
+    (await import('fs')).writeFileSync(`${process.env.SHOTS}/figurinha-noite.png`, Buffer.from(png, 'base64'));
+  }
   expect(errors.length === 0, errors.join('; '));
   await ctx.close();
 });

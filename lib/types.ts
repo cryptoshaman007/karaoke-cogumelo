@@ -231,3 +231,14 @@ export function photoUrl(singer: Pick<Singer, 'id' | 'photo_at'> | null | undefi
   if (!singer?.photo_at || !settings?.photos_enabled) return null;
   return `/api/photo/${singer.id}?v=${encodeURIComponent(singer.photo_at)}`;
 }
+
+/** One song this customer sang tonight, for the "figurinha da noite" (best first). */
+export interface NightSong {
+  id: number;
+  title: string;
+  /** crowd's grade, 0 to 10, or null with no votes */
+  score: number | null;
+  votes: number;
+  /** reactions from other people while it played */
+  reactions: number;
+}

@@ -394,3 +394,25 @@ input[type=search]::-webkit-search-cancel-button { display: none; }
 .group-title { font-size: .72rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin: 1rem 0 -.2rem; padding-left: .2rem; }
 .add-someone { border: 1.5px solid var(--accent); }
 .add-someone summary h2 { color: var(--text); }
+
+/* figurinha da noite (fim da tela do cantor) */
+.search { scroll-margin-top: .8rem; }
+.night-sticker { background: linear-gradient(160deg, rgba(167, 139, 250, .14), var(--panel) 60%); }
+.night-head { font-size: 1.15rem; }
+.night-top { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .4rem; }
+.night-top li { display: flex; align-items: center; gap: .55rem; background: var(--panel-2); border-radius: var(--radius-sm); padding: .5rem .65rem; min-width: 0; }
+.night-top .medal { font-size: 1.25rem; flex: none; }
+.night-top .grow { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 550; }
+.night-top b { color: var(--accent); font-size: 1.1rem; font-variant-numeric: tabular-nums; flex: none; }
+
+/* sugestões por estilo */
+.cat-chips { display: flex; flex-wrap: wrap; gap: .45rem; }
+.cat-chip { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); border-radius: 99px; padding: .45rem .8rem; font: inherit; font-size: .88rem; cursor: pointer; }
+.cat-chip.on { border-color: var(--accent); background: rgba(167, 139, 250, .18); color: var(--text); font-weight: 600; }
+.sugg-list .small { margin-top: .1rem; }
+
+/* busca do celular com mais destaque: contorno roxo e letra maior */
+main.phone .searchbar input { font-size: 1.08rem; border: 2px solid rgba(167, 139, 250, .65); background: var(--panel-2); min-height: 52px; }
+main.phone .searchbar input::placeholder { color: #a9a3c4; }
+main.phone .searchbar input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(167, 139, 250, .25); }
+main.phone .searchbar .btn { min-height: 52px; }
