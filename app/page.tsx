@@ -202,7 +202,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   // last night's leftovers are cleaned before the first song of the day is allowed to start
   const [nightReady, setNightReady] = useState(false);
   const nightReadyRef = useRef(false);
-  const [scoreCard, setScoreCard] = useState<{ queueId: number; singerId: string; name: string; title: string; score: number } | null>(null);
+  const [scoreCard, setScoreCard] = useState<{ queueId: number; singerId: string; name: string; title: string; score: number; votes: number } | null>(null);
   const [gif, setGif] = useState<TvGif | null>(null);
   // video options (gear)
   const [videoMenu, setVideoMenu] = useState(false);
@@ -823,7 +823,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started, loaded, nightReady, playing?.id, waiting.length, isOwner]);
 
-  // Night ranking: when a song ends, the database grades it from the reactions it got. Show the
+  // Night ranking: when a song ends, the database grades it from the votes (5 faces) it got. Show the
   // grade for a few seconds (it sits on top of the "next singer" countdown).
   const lastSinger = useRef<{ id: number; singerId: string; name: string; title: string } | null>(null);
   const scoreTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -839,10 +839,10 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     if (!s?.ranking_enabled || s.contest_id) return;
     const t = setTimeout(async () => {
       try {
-        const { data } = await browserClient().from('queue').select('id, score').eq('id', prev.id).maybeSingle();
+        const { data } = await browserClient().from('queue').select('id, score, vote_count').eq('id', prev.id).maybeSingle();
         const score = data && !Array.isArray(data) ? Number((data as { score?: number | null }).score) : NaN;
         if ((data as { score?: number | null } | null)?.score == null || !Number.isFinite(score)) return;
-        setScoreCard({ queueId: prev.id, singerId: prev.singerId, name: prev.name, title: prev.title, score });
+        setScoreCard({ queueId: prev.id, singerId: prev.singerId, name: prev.name, title: prev.title, score, votes: Number((data as { vote_count?: number | null }).vote_count) || 0 });
         if (scoreTimer.current) clearTimeout(scoreTimer.current);
         scoreTimer.current = setTimeout(() => setScoreCard(null), SCORE_CARD_MS);
       } catch {}
@@ -1290,6 +1290,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             <p>
               {scorePhrase(scoreCard.score)}
               {scorePos >= 0 && ` · ${scorePos + 1}º lugar na noite`}
+              {scoreCard.votes > 0 && ` · ${scoreCard.votes === 1 ? '1 voto' : `${scoreCard.votes} votos`}`}
             </p>
           </div>
         )}
@@ -1498,8 +1499,14 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           <div className="tv-message ranking-on">
             ⭐ Líder da noite: {ranking[0].name}
             <small>
-              Nota {fmtScore(ranking[0].score)}. Reaja pelo celular pra dar nota em quem canta!
+              Nota {fmtScore(ranking[0].score)}. Dá sua nota pelo celular: 5 carinhas pra quem tá cantando!
             </small>
+          </div>
+        )}
+        {rankingOn && !settings?.contest_id && ranking.length === 0 && (
+          <div className="tv-message ranking-on">
+            ⭐ Ranking da noite valendo!
+            <small>Dá sua nota pelo celular: 5 carinhas pra quem tá cantando.</small>
           </div>
         )}
         {settings?.tv_message && <div className="tv-message">{settings.tv_message}</div>}

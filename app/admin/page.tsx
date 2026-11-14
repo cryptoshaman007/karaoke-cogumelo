@@ -257,6 +257,26 @@ function Panel({ onLogout }: { onLogout: () => void }) {
         </label>
       </section>
 
+      <details className="card fold add-someone">
+        <summary>
+          <div className="grow">
+            <h2>➕ Pôr alguém na fila</h2>
+            <span className="muted small">Pra quem tá sem celular: digita o nome e escolhe a música</span>
+          </div>
+        </summary>
+        <label className="field">
+          <span>Nome da pessoa</span>
+          <input
+            placeholder="Nome"
+            maxLength={40}
+            value={addName}
+            onChange={(e) => (setAddName(e.target.value), setAdded(''))}
+          />
+        </label>
+        {added && <p className="ok">{added}</p>}
+        <SongSearch maxDurationSec={settings.max_duration_sec} pickLabel="Adicionar" onPick={addForSomeone} />
+      </details>
+
       <section className="card">
         <h2>
           Fila <span className="count-pill muted-pill">{waiting.length}</span>
@@ -338,6 +358,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
         </span>
       </section>
 
+      <h2 className="group-title">Diversão</h2>
       <section className="card">
         <h2>⭐ Ranking da noite {settings.ranking_enabled && <span className="count-pill muted-pill">ligado</span>}</h2>
         <label className="switch">
@@ -345,7 +366,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
           <span>
             <strong>Nota no fim de cada música</strong>
             <span className="muted small">
-              Vale a noite toda. A nota (de 5 a 10) sai das reações da galera: quanto mais gente reagir, maior. Aparece no telão quando a música acaba.
+              Vale a noite toda. Enquanto alguém canta, a galera escolhe uma das 5 carinhas no celular (igual ao campeonato). A nota de 0 a 10 é a média delas e aparece no telão quando a música acaba.
             </span>
           </span>
         </label>
@@ -355,8 +376,7 @@ function Panel({ onLogout }: { onLogout: () => void }) {
             {settings.ranking_on_tv && holding && (
               <p className="banner warn">Tem gente esperando pra cantar: o telão fecha o ranking sozinho em 3 minutos.</p>
             )}
-            {!settings.reactions_enabled && <p className="banner warn">As reações estão desligadas, então ninguém consegue dar nota. Liga elas nas configurações.</p>}
-            <Ranking rows={ranking} limit={10} highlightFirst unit="reactions" empty="Ninguém pontuou ainda nessa noite." />
+            <Ranking rows={ranking} limit={10} highlightFirst empty="Ninguém pontuou ainda nessa noite." />
             <button className="btn self-start" disabled={busy} onClick={() => setting({ rankingOnTv: !settings.ranking_on_tv })}>
               {settings.ranking_on_tv ? 'Tirar o ranking do telão' : 'Mostrar o ranking no telão'}
             </button>
@@ -408,28 +428,9 @@ function Panel({ onLogout }: { onLogout: () => void }) {
         )}
       </section>
 
-      <details className="card fold">
-        <summary>
-          <div className="grow">
-            <h2>Pôr alguém na fila</h2>
-            <span className="muted small">Pra quem tá sem celular</span>
-          </div>
-        </summary>
-        <label className="field">
-          <span>Nome da pessoa</span>
-          <input
-            placeholder="Nome"
-            maxLength={40}
-            value={addName}
-            onChange={(e) => (setAddName(e.target.value), setAdded(''))}
-          />
-        </label>
-        {added && <p className="ok">{added}</p>}
-        <SongSearch maxDurationSec={settings.max_duration_sec} pickLabel="Adicionar" onPick={addForSomeone} />
-      </details>
-
+      <h2 className="group-title">Ajustes</h2>
       <section className="card">
-        <h2>Configurações</h2>
+        <h2>Fila e músicas</h2>
         <label className="switch">
           <input type="checkbox" checked={settings.queue_open} onChange={(e) => setting({ queueOpen: e.target.checked })} />
           <span>
@@ -442,55 +443,6 @@ function Panel({ onLogout }: { onLogout: () => void }) {
           <span>
             <strong>Aprovar gente nova</strong>
             <span className="muted small">Quem você já aprovou uma vez não precisa de novo.</span>
-          </span>
-        </label>
-        <label className="switch">
-          <input type="checkbox" checked={settings.reactions_enabled} onChange={(e) => setting({ reactionsEnabled: e.target.checked })} />
-          <span>
-            <strong>Reações no telão</strong>
-            <span className="muted small">Palmas, coração, fogo e choro mandados pelo celular. É delas que sai a nota do ranking.</span>
-          </span>
-        </label>
-        <label className="switch">
-          <input type="checkbox" checked={settings.gifs_enabled} onChange={(e) => setting({ gifsEnabled: e.target.checked })} />
-          <span>
-            <strong>GIFs e figurinhas no telão</strong>
-            <span className="muted small">A galera manda pelo celular e aparece num cantinho do vídeo. Um por pessoa a cada 12 segundos.</span>
-          </span>
-        </label>
-        <label className="switch">
-          <input type="checkbox" checked={settings.photos_enabled} onChange={(e) => setting({ photosEnabled: e.target.checked })} />
-          <span>
-            <strong>Selfie de quem canta</strong>
-            <span className="muted small">Foto opcional que aparece no telão, na fila, no ranking e na figurinha da nota. Some no fim da noite.</span>
-          </span>
-        </label>
-        <div className="field">
-          <span>Limpeza automática da fila (pra não sobrar pedido da noite passada)</span>
-          <select
-            className="select"
-            aria-label="Limpeza automática da fila"
-            value={settings.night_reset_hour}
-            disabled={busy}
-            onChange={(e) => setting({ nightResetHour: Number(e.target.value) })}
-          >
-            <option value={-1}>Desligada</option>
-            {[4, 6, 8, 10, 12, 14, 16].map((h) => (
-              <option key={h} value={h}>
-                Todo dia às {h}h
-              </option>
-            ))}
-            {![-1, 4, 6, 8, 10, 12, 14, 16].includes(settings.night_reset_hour) && (
-              <option value={settings.night_reset_hour}>Todo dia às {settings.night_reset_hour}h</option>
-            )}
-          </select>
-          <span className="small">Só limpa se ninguém cantou nem pediu música nos últimos 45 minutos, então nunca corta a festa no meio.</span>
-        </div>
-        <label className="switch">
-          <input type="checkbox" checked={settings.tv_add_enabled} onChange={(e) => setting({ tvAddEnabled: e.target.checked })} />
-          <span>
-            <strong>Adicionar pedido pelo telão</strong>
-            <span className="muted small">Mostra um botão “+” discreto no computador, pra quem tá sem celular.</span>
           </span>
         </label>
         <div className="field">
@@ -530,6 +482,59 @@ function Panel({ onLogout }: { onLogout: () => void }) {
             </button>
           </div>
         </div>
+        <div className="field">
+          <span>Limpeza automática da fila (pra não sobrar pedido da noite passada)</span>
+          <select
+            className="select"
+            aria-label="Limpeza automática da fila"
+            value={settings.night_reset_hour}
+            disabled={busy}
+            onChange={(e) => setting({ nightResetHour: Number(e.target.value) })}
+          >
+            <option value={-1}>Desligada</option>
+            {[4, 6, 8, 10, 12, 14, 16].map((h) => (
+              <option key={h} value={h}>
+                Todo dia às {h}h
+              </option>
+            ))}
+            {![-1, 4, 6, 8, 10, 12, 14, 16].includes(settings.night_reset_hour) && (
+              <option value={settings.night_reset_hour}>Todo dia às {settings.night_reset_hour}h</option>
+            )}
+          </select>
+          <span className="small">Só limpa se ninguém cantou nem pediu música nos últimos 45 minutos, então nunca corta a festa no meio.</span>
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>Telão e celular</h2>
+        <label className="switch">
+          <input type="checkbox" checked={settings.reactions_enabled} onChange={(e) => setting({ reactionsEnabled: e.target.checked })} />
+          <span>
+            <strong>Reações no telão</strong>
+            <span className="muted small">Palmas, coração, fogo e choro mandados pelo celular. Só festa: não mudam a nota.</span>
+          </span>
+        </label>
+        <label className="switch">
+          <input type="checkbox" checked={settings.gifs_enabled} onChange={(e) => setting({ gifsEnabled: e.target.checked })} />
+          <span>
+            <strong>GIFs e figurinhas no telão</strong>
+            <span className="muted small">A galera manda pelo celular e aparece num cantinho do vídeo. Um por pessoa a cada 12 segundos.</span>
+          </span>
+        </label>
+        <label className="switch">
+          <input type="checkbox" checked={settings.photos_enabled} onChange={(e) => setting({ photosEnabled: e.target.checked })} />
+          <span>
+            <strong>Selfie de quem canta</strong>
+            <span className="muted small">Foto opcional que aparece no telão, na fila, no ranking e na figurinha da nota. Some no fim da noite.</span>
+          </span>
+        </label>
+        <label className="switch">
+          <input type="checkbox" checked={settings.tv_add_enabled} onChange={(e) => setting({ tvAddEnabled: e.target.checked })} />
+          <span>
+            <strong>Adicionar pedido pelo telão</strong>
+            <span className="muted small">Mostra um botão “+” discreto no computador, pra quem tá sem celular.</span>
+          </span>
+        </label>
         <div className="field">
           <span>Recado no telão</span>
           <div className="row">

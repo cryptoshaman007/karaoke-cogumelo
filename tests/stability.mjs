@@ -286,6 +286,14 @@ async function wire(page, b, { admin = true } = {}) {
       return json({ token: 'tok', singer: b.me });
     }
     if (path === '/api/me') return json({ singer: b.me });
+    if (path === '/api/vote') {
+      const cur = b.playing();
+      if (req.method() === 'POST') {
+        b.votes = (b.votes ?? []).concat({ queueId: cur?.id ?? null, score: body.score });
+        return json({ ok: true, queueId: cur?.id ?? null, score: body.score });
+      }
+      return json({ queueId: cur?.id ?? null, score: null });
+    }
     if (path.startsWith('/api/photo/')) {
       b.photoLoads = (b.photoLoads ?? 0) + 1;
       return route.fulfill({ contentType: 'image/jpeg', body: SELFIE });
@@ -1034,7 +1042,7 @@ await test('ranking da noite: a nota aparece no fim da música, some sozinha e a
   const { page, ctx, errors } = await openTv(b);
   expect((await until(page, async () => (await yt(page)).videoId === 'vidAAAAAAA1' && (await yt(page)).state === 1, 30000)) >= 0, 'a primeira não tocou');
   first.score = 8.7; // what the database trigger would write when the song ends
-  first.reaction_count = 12;
+  first.vote_count = 12;
   expect((await until(page, async () => (await page.locator('.score-card').count()) === 1, 40000)) >= 0, 'a nota não apareceu');
   await run(page, 600);
   await shot(page, 'tv-nota');
@@ -1113,7 +1121,7 @@ await test('celular: ranking da noite e figurinha pro telão', async () => {
   const b = makeBackend();
   Object.assign(b.settings, { ranking_enabled: true, gifs_enabled: true, night_started_at: new Date(0).toISOString() });
   const done = b.add('Ana', 'vidAAAAAAA1');
-  Object.assign(done, { status: 'done', score: 9.1, reaction_count: 7 });
+  Object.assign(done, { status: 'done', score: 9.1, vote_count: 7 });
   const { page, ctx, errors } = await openPhone(b);
   expect((await until(page, async () => (await page.getByText('Ranking da noite').count()) === 1, 5000)) >= 0, 'sem ranking no celular');
   await shot(page, 'celular-ranking');
@@ -1220,7 +1228,7 @@ await test('celular: depois de cantar, a figurinha com a nota fica pronta pra co
   b.notify('queue');
   expect((await until(page, async () => (await page.getByText('Você tá no palco').count()) === 1, 5000)) >= 0, 'o celular não viu a pessoa no palco');
   const mine = b.queue[b.queue.length - 1];
-  Object.assign(mine, { status: 'done', score: 9.3, reaction_count: 11 });
+  Object.assign(mine, { status: 'done', score: 9.3, vote_count: 11 });
   b.notify('queue');
   expect((await until(page, async () => (await page.locator('.sticker-ready').textContent().catch(() => '')).includes('9,3'), 20000)) >= 0, 'a nota não chegou no celular');
   await shot(page, 'celular-figurinha-pronta');
@@ -1453,6 +1461,7 @@ await test('admin: quem foi recusado numa noite anterior continua na lista e pod
   await wire(page, b, { admin: true });
   await page.goto(BASE + '/admin');
   await run(page, 2000);
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/admin-topo.png`, fullPage: true });
   await page.locator('details', { hasText: 'Recusados' }).locator('summary').click().catch(() => {});
   await run(page, 300);
   expect((await page.getByText('Recusado Semana Passada').count()) >= 1, 'o recusado antigo não aparece no admin');
@@ -1468,7 +1477,7 @@ await test('celular: depois de zerar a noite, o "Mandou bem" da noite anterior s
   b.notify('queue');
   expect((await until(page, async () => (await page.getByText('Você tá no palco').count()) === 1, 5000)) >= 0, 'o celular não viu a pessoa no palco');
   const mine = b.queue[b.queue.length - 1];
-  Object.assign(mine, { status: 'done', score: 5, reaction_count: 3 });
+  Object.assign(mine, { status: 'done', score: 5, vote_count: 3 });
   b.notify('queue');
   expect((await until(page, async () => (await page.getByText('Mandou bem').count()) === 1, 20000)) >= 0, 'o "Mandou bem" não apareceu');
   // admin: "Zerar a noite"
@@ -1524,6 +1533,78 @@ await test('celular: GIFs prontos para escolher e mandar, sem busca configurada'
   await run(page, 1000);
   expect(b.apiCalls.some((c) => c.path === '/api/gif' && c.method === 'POST' && c.body.preset === 'Rgn6cUfaN5zW'), 'o GIF pronto não foi enviado');
   expect((await page.locator('.sheet').count()) === 0, 'a folha de GIFs não fechou');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('celular: ranking da noite mostra as 5 carinhas e a nota vai pro voto', async () => {
+  const b = makeBackend();
+  Object.assign(b.settings, { ranking_enabled: true, night_started_at: new Date(0).toISOString() });
+  const ana = b.add('Ana', 'vidAAAAAAA1', { duration: 200 });
+  b.advance(null, 'done');
+  const { page, ctx, errors } = await openPhone(b);
+  expect((await until(page, async () => (await page.getByText('Ranking da noite · sua nota').count()) === 1, 5000)) >= 0, 'as carinhas não apareceram no ranking da noite');
+  await page.getByRole('radio', { name: 'Arrasou' }).click();
+  await run(page, 800);
+  expect(b.votes?.some((v) => v.queueId === ana.id && v.score === 5), 'o voto não foi enviado');
+  expect((await page.getByRole('radio', { name: 'Arrasou' }).getAttribute('aria-checked')) === 'true', 'a carinha escolhida não ficou marcada');
+  await shot(page, 'celular-voto-noite');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('celular: vibra e toca uns 10 s antes da vez e de novo quando chega a vez', async () => {
+  const b = makeBackend();
+  b.settings.intermission_sec = 2;
+  const { page, ctx, errors } = await openPhone(b);
+  await page.evaluate(() => {
+    window.__vib = [];
+    navigator.vibrate = (p) => (window.__vib.push(JSON.stringify(p)), true);
+  });
+  const now = await page.evaluate(() => Date.now());
+  const ana = b.add('Ana', 'vidAAAAAAA1', { duration: 30 });
+  Object.assign(ana, { status: 'playing', started_at: new Date(now).toISOString() });
+  b.queue.push({
+    id: b.nextId++, singer_id: b.me.id, video_id: 'vidZECA0001', title: 'Evidências (karaoke)', thumbnail: null,
+    duration_sec: 40, status: 'waiting', position: 999, created_at: new Date().toISOString(), started_at: null,
+  });
+  b.notify('queue');
+  expect((await until(page, async () => (await page.getByText('Você é o próximo!').count()) === 1, 5000)) >= 0, 'o celular não mostrou que é o próximo');
+  await shot(page, 'celular-proximo');
+  const vib = () => page.evaluate(() => window.__vib.slice());
+  await run(page, 12000); // ~13 s into a 30 s song + 2 s countdown: still too early
+  expect((await vib()).length === 0, `vibrou cedo demais: ${await vib()}`);
+  const t = await until(page, async () => (await vib()).length > 0, 15000);
+  expect(t >= 0, 'não vibrou antes da vez');
+  expect((await vib())[0] === '[250,120,250]', `vibração errada antes da vez: ${await vib()}`);
+  b.advance(ana.id, 'done');
+  expect((await until(page, async () => (await vib()).length > 1, 5000)) >= 0, 'não vibrou quando chegou a vez');
+  expect((await vib())[1] === '[400,150,400,150,700]', `vibração errada na vez: ${await vib()}`);
+  await run(page, 3000);
+  expect((await vib()).length === 2, `vibrou mais vezes do que devia: ${await vib()}`);
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('celular: segunda música em destaque e a busca vem antes da fila', async () => {
+  const b = makeBackend();
+  b.settings.songs_per_person = 2;
+  b.add('Ana', 'vidAAAAAAA1', { duration: 200 });
+  b.advance(null, 'done');
+  const { page, ctx, errors } = await openPhone(b);
+  await page.getByRole('searchbox').fill('evidencias');
+  await page.getByRole('button', { name: 'Buscar' }).click();
+  await run(page, 1000);
+  await page.getByRole('button', { name: 'Cantar', exact: true }).click();
+  await new Promise((r) => setTimeout(r, 500)); // the fake server takes 300 ms of real time
+  await run(page, 2500);
+  expect((await until(page, async () => (await page.locator('.next-song').count()) === 1, 5000)) >= 0, 'sem o cartão da próxima música');
+  const order = await page.evaluate(() => {
+    const y = (sel) => document.querySelector(sel)?.getBoundingClientRect().top ?? -1;
+    return { mine: y('.mysong'), next: y('.next-song'), line: y('ol.line') };
+  });
+  expect(order.mine < order.next && order.next < order.line, `ordem errada na tela: ${JSON.stringify(order)}`);
+  await shot(page, 'celular-segunda-musica');
   expect(errors.length === 0, errors.join('; '));
   await ctx.close();
 });
