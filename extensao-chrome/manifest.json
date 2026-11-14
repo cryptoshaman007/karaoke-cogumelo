@@ -1,14 +1,18 @@
 {
   "manifest_version": 3,
   "name": "Karaokê Cogumelo – Telão",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Toca no telão do Karaokê Cogumelo os vídeos que só funcionam no youtube.com, e volta pra fila sozinho quando a música acaba.",
   "permissions": ["storage"],
   "host_permissions": ["https://www.youtube.com/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
-      "matches": ["https://karaoke-cogumelo.vercel.app/*", "http://localhost/*"],
+      "matches": [
+        "https://karaoke.cogumelobar.com/*",
+        "https://karaoke-cogumelo.vercel.app/*",
+        "http://localhost/*"
+      ],
       "js": ["telao.js"],
       "run_at": "document_start"
     },
