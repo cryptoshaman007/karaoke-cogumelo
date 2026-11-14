@@ -49,6 +49,17 @@ function Panel({ onLogout }: { onLogout: () => void }) {
     return () => clearInterval(t);
   }, [loadBlocked]);
   const volTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // is the projector on, and does it have the Chrome extension? (null = unknown / database not updated)
+  const [tv, setTv] = useState<{ tvSeenAt: string | null; extVersion: string | null; extSeenAt: string | null } | null>(null);
+  useEffect(() => {
+    const load = () =>
+      get('/api/tv')
+        .then((d) => setTv(d?.status ?? null))
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
+  }, []);
 
   // fill the form once with what is saved
   useEffect(() => {
@@ -536,6 +547,20 @@ function Panel({ onLogout }: { onLogout: () => void }) {
           </span>
         </label>
         <label className="switch">
+          <input
+            type="checkbox"
+            checked={settings.yt_extension !== false}
+            onChange={(e) => setting({ ytExtension: e.target.checked })}
+          />
+          <span>
+            <strong>Extensão do telão nos vídeos do YouTube</strong>
+            <span className="muted small">
+              {extLine(tv)} Com ela, os vídeos que só tocam no youtube.com abrem numa janela que fecha sozinha no fim da música.
+              Desligada, fecha a janela e clica em Terminou no telão.
+            </span>
+          </span>
+        </label>
+        <label className="switch">
           <input type="checkbox" checked={settings.tv_add_enabled} onChange={(e) => setting({ tvAddEnabled: e.target.checked })} />
           <span>
             <strong>Adicionar pedido pelo telão</strong>
@@ -606,4 +631,13 @@ function Panel({ onLogout }: { onLogout: () => void }) {
       </button>
     </main>
   );
+}
+
+/** "Extensão: ativa / não encontrada / telão desligado", from the projector's last beat. */
+function extLine(tv: { tvSeenAt: string | null; extVersion: string | null; extSeenAt: string | null } | null): string {
+  if (!tv) return '';
+  const fresh = (at: string | null) => !!at && Date.now() - new Date(at).getTime() < 60000;
+  if (!fresh(tv.tvSeenAt)) return 'Telão desligado agora.';
+  if (tv.extVersion && fresh(tv.extSeenAt)) return `✅ Extensão ativa no telão (v${tv.extVersion}).`;
+  return '⚠️ Extensão não encontrada no telão.';
 }

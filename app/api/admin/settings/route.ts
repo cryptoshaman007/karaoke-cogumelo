@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(h) || h > 23) return fail('Hora entre 0 e 23');
     patch.night_reset_hour = h < 0 ? null : h;
   }
+  if (body.ytExtension != null) patch.yt_extension = Boolean(body.ytExtension);
   if (body.tvAddEnabled != null) patch.tv_add_enabled = Boolean(body.tvAddEnabled);
   if (body.songsPerPerson != null) {
     const n = Math.round(Number(body.songsPerPerson));

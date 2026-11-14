@@ -408,9 +408,10 @@ async function wire(page, b, { admin = true } = {}) {
 const results = [];
 let browser;
 
-async function openTv(b, { click = true, admin = true } = {}) {
+async function openTv(b, { click = true, admin = true, init = null } = {}) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   const page = await ctx.newPage();
+  if (init) await page.addInitScript(init);
   const errors = [];
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   await page.clock.install();
@@ -514,6 +515,77 @@ await test('vídeo bloqueado para embed: abre no youtube.com, espera o "Terminou
   const t2 = await until(page, async () => b.queue[1].status === 'playing', 20000);
   expect(t2 >= 0, `"Terminou" não passou para a próxima: ${statuses(b)}`);
   expect(b.queue[0].status === 'done', 'a do YouTube deveria ficar como cantada');
+  await ctx.close();
+});
+
+await test('vídeo bloqueado com a extensão do Chrome: ela abre, acompanha e a fila segue sozinha no fim', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'blockedAAA1');
+  b.add('Bia', 'vidBBBBBBB2');
+  // a stand-in for the extension (extensao-chrome/telao.js): same messages, no real window
+  const fakeExt = () => {
+    window.__ext = { opens: [], cmds: [] };
+    const say = (m) => window.postMessage({ source: 'karaoke-ext', version: '1.0.0', ...m }, location.origin);
+    window.addEventListener('message', (e) => {
+      const m = e.data;
+      if (!m || m.source !== 'karaoke-page') return;
+      if (m.type === 'hello') say({ type: 'ready' });
+      if (m.type === 'open') {
+        window.__ext.opens.push(m);
+        say({ type: 'opened', queueId: m.queueId });
+      }
+      if (m.type === 'cmd') window.__ext.cmds.push(m.cmd);
+    });
+    window.__extSay = say;
+  };
+  const { page, ctx } = await openTv(b, { init: fakeExt });
+  const popups = [];
+  ctx.on('page', (p) => popups.push(p));
+  await page.evaluate(() => (window.__yt.behavior.blockedAAA1 = 'error150'));
+  const t = await until(page, async () => (await page.evaluate(() => window.__ext.opens.length)) > 0, 30000);
+  expect(t >= 0, 'não pediu pra extensão abrir a janela');
+  const open = await page.evaluate(() => window.__ext.opens[0]);
+  expect(open.videoId === 'blockedAAA1' && open.rect && open.rect.w > 100, `pedido estranho: ${JSON.stringify(open)}`);
+  expect(popups.length === 0, 'abriu uma janela por conta própria, além da extensão');
+  // the video plays for a while (status every second), then pauses for a long time: nothing moves
+  for (let i = 1; i <= 40; i++) {
+    await page.evaluate((s) => window.__extSay({ type: 'status', queueId: s.q, time: s.i, duration: 200, paused: s.i > 20, ad: false }), { q: open.queueId, i });
+    await run(page, 1000);
+  }
+  expect(b.queue[0].status === 'playing', `a fila andou durante a música: ${statuses(b)}`);
+  await page.evaluate((q) => window.__extSay({ type: 'ended', queueId: q }), open.queueId);
+  const t2 = await until(page, async () => b.queue[1].status === 'playing', 20000);
+  expect(t2 >= 0, `fim do vídeo não passou para a próxima: ${statuses(b)}`);
+  expect(b.queue[0].status === 'done', 'a do YouTube deveria ficar como cantada');
+  await ctx.close();
+});
+
+await test('extensão instalada mas muda: o telão volta pro jeito manual sem tocar duas vezes', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'blockedAAA1');
+  b.add('Bia', 'vidBBBBBBB2');
+  const silentExt = () => {
+    window.__opens = 0;
+    window.addEventListener('message', (e) => {
+      const m = e.data;
+      if (!m || m.source !== 'karaoke-page') return;
+      if (m.type === 'hello') window.postMessage({ source: 'karaoke-ext', version: '1.0.0', type: 'ready' }, location.origin);
+      if (m.type === 'open') window.__opens++;
+    });
+  };
+  const { page, ctx } = await openTv(b, { init: silentExt });
+  const popups = [];
+  ctx.on('page', (p) => popups.push(p));
+  await page.evaluate(() => (window.__yt.behavior.blockedAAA1 = 'error150'));
+  await until(page, async () => (await page.evaluate(() => window.__opens)) > 0, 30000);
+  // never says anything: after a while the projector opens the window itself and waits for "Terminou"
+  const t = await until(page, async () => popups.length > 0, 60000);
+  expect(t >= 0, 'sem resposta da extensão, não abriu a janela do jeito manual');
+  await run(page, 30000);
+  expect(popups.length === 1 && b.queue[0].status === 'playing', `estado estranho: ${popups.length} janelas, ${statuses(b)}`);
+  await page.getByRole('button', { name: /Terminou/ }).click();
+  const t2 = await until(page, async () => b.queue[1].status === 'playing', 20000);
+  expect(t2 >= 0, `"Terminou" não passou para a próxima: ${statuses(b)}`);
   await ctx.close();
 });
 

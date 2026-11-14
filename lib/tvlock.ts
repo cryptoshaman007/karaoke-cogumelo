@@ -34,3 +34,28 @@ export async function holdsTv(id: string): Promise<boolean> {
     return false;
   }
 }
+
+const EXT_RE = /^[0-9]{1,3}(\.[0-9]{1,4}){0,3}$/;
+
+/**
+ * The projector in charge says which version of the Chrome extension it has ('' = none), so the
+ * admin can see it (migration 012). Kept in tv_lock, not settings: it never wakes the phones.
+ */
+export async function reportExtension(version: unknown) {
+  const v = typeof version === 'string' && EXT_RE.test(version) ? version : null;
+  try {
+    await db().from('tv_lock').update({ ext_version: v, ext_seen_at: new Date().toISOString() }).eq('id', 1);
+  } catch {}
+}
+
+/** What the admin sees: the projector's last beat and its extension. Null when unknown. */
+export async function tvStatus(): Promise<{ tvSeenAt: string | null; extVersion: string | null; extSeenAt: string | null } | null> {
+  try {
+    const { data, error } = await db().from('tv_lock').select('seen_at, ext_version, ext_seen_at').eq('id', 1).maybeSingle();
+    if (error || !data) return null;
+    const d = data as { seen_at?: string | null; ext_version?: string | null; ext_seen_at?: string | null };
+    return { tvSeenAt: d.seen_at ?? null, extVersion: d.ext_version ?? null, extSeenAt: d.ext_seen_at ?? null };
+  } catch {
+    return null;
+  }
+}

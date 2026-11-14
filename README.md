@@ -83,6 +83,8 @@ chrome.exe --autoplay-policy=no-user-gesture-required --disable-popup-blocking -
 
 (O modo `--kiosk` não deixa abrir outra janela.) Se o Chrome bloquear mesmo assim, o telão mostra o botão "Abrir no YouTube". O botão "Mostrar só o vídeo" troca pra página do YouTube só com o player. Pra voltar a recusar esses vídeos na hora da escolha, ponha `BLOCKED_VIDEOS=skip` nas variáveis da Vercel.
 
+**Com a extensão do Chrome (recomendado):** a pasta [`extensao-chrome/`](extensao-chrome/) é uma extensão pro Chrome do telão. Com ela, o telão abre a janela do YouTube por ela, acompanha o vídeo (pausar e voltar no YouTube não atrapalha), e quando a música acaba fecha a janela e segue a fila sozinho. Fechar a janela na mão também passa pra próxima. O Pausar, o Recomeçar e o volume do admin chegam na janela. Não precisa liberar pop-ups. Como instalar: veja `extensao-chrome/LEIA-ME.txt` (chrome://extensions → Modo do desenvolvedor → Carregar sem compactação → escolher a pasta). No admin, em "Telão e celular", aparece se a extensão está ativa e um interruptor pra usar ou não. Se ela não responder, o telão volta pro jeito manual abaixo. Precisa da migração `012_yt_extension.sql`.
+
 ## Estabilidade
 
 O telão foi feito para ficar a noite inteira aberto sem ninguém mexer:
