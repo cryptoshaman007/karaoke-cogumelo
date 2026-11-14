@@ -1495,7 +1495,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             <small>Dá sua nota pelo celular enquanto cada um canta.</small>
           </div>
         )}
-        {rankingOn && !settings?.contest_id && ranking.length > 0 && (
+        {rankingOn && settings?.leader_on_tv !== false && !settings?.contest_id && ranking.length > 0 && (
           <div className="tv-message ranking-on">
             ⭐ Líder da noite: {ranking[0].name}
             <small>
@@ -1503,7 +1503,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             </small>
           </div>
         )}
-        {rankingOn && !settings?.contest_id && ranking.length === 0 && (
+        {rankingOn && settings?.leader_on_tv !== false && !settings?.contest_id && ranking.length === 0 && (
           <div className="tv-message ranking-on">
             ⭐ Ranking da noite valendo!
             <small>Dá sua nota pelo celular: 5 carinhas pra quem tá cantando.</small>
