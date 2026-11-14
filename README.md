@@ -75,7 +75,7 @@ Estas duas últimas precisam da migração `supabase/migrations/004_reserves_and
 
 ### Vídeos que só tocam no YouTube
 
-Alguns canais (KaraFun e outros) não deixam o vídeo tocar fora do youtube.com. Quando chega a vez de um desses, o telão abre o youtube.com numa janela por cima da área do vídeo, e a fila continua à direita. A música acaba pela duração do vídeo (ou pelo limite de tempo). O telão não consegue fechar nem pausar essa janela (o próprio YouTube corta a ligação entre as janelas): pra pular, feche a janela do YouTube (Alt+F4) e aperte Pular. Deixe a reprodução automática do YouTube desligada. Pra funcionar sem clique, o Chrome do telão precisa liberar pop-ups:
+Alguns canais (KaraFun e outros) não deixam o vídeo tocar fora do youtube.com. Quando chega a vez de um desses, o telão abre o youtube.com numa janela por cima da área do vídeo, e a fila continua à direita. O telão não consegue ver, fechar nem pausar essa janela (o próprio YouTube corta a ligação entre as janelas), então a fila espera: quando a música acabar, feche a janela do YouTube (Alt+F4) e clique em **Terminou, próxima música** no telão (ou Pular no admin). Se ninguém clicar, a fila anda sozinha 10 minutos depois do fim do vídeo. Deixe a reprodução automática do YouTube desligada. Pra funcionar sem clique, o Chrome do telão precisa liberar pop-ups:
 
 ```
 chrome.exe --autoplay-policy=no-user-gesture-required --disable-popup-blocking --start-fullscreen --app=https://karaoke-cogumelo.vercel.app

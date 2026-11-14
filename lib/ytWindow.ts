@@ -3,8 +3,8 @@
 // hits one, it opens youtube.com in a separate window placed exactly over the video area, and the
 // queue on the right stays visible.
 //
-// The projector cannot see inside that window (another site), so the song's end comes from its
-// length (or the time limit). And as soon as YouTube loads, Chrome cuts the link between the two
+// The projector cannot see inside that window (another site), so the next song waits for a click on
+// "Terminou" (or Pular). And as soon as YouTube loads, Chrome cuts the link between the two
 // windows (YouTube's Cross-Origin-Opener-Policy): from then on `win.closed` reads true and the
 // window can no longer be closed, moved or reused from here. Pular, pause and restart cannot reach
 // it; a Chrome extension would be needed for that.

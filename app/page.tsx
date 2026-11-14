@@ -110,9 +110,11 @@ const PLAYER_READY_TIMEOUT = 20000;
 // Right after a video is loaded the player can still report the previous one ("ended", its
 // time). Nothing is decided from those readings during this moment.
 const LOAD_GRACE = 5000;
-// A video that only plays on youtube.com (in its own window): extra seconds for the page to load
-// before the song's clock is up, and how long a window Chrome blocked waits for a click.
-const YT_WINDOW_LOAD_SEC = 6;
+// A video that only plays on youtube.com (in its own window). The projector cannot see that window
+// (nor know when it closes), and the video there may be paused or restarted by hand, so the next
+// song waits for someone to press "Terminou" (or Pular). Only as a safety net, if nobody does, the
+// queue moves this long after the video's length.
+const YT_WINDOW_SAFETY_SEC = 10 * 60;
 const YT_WINDOW_BLOCKED_SKIP_MS = 90000;
 // Ranking or contest results on screen hold the queue. With people waiting they close by themselves after this.
 const HOLD_AUTOCLOSE_MS = 3 * 60 * 1000;
@@ -453,11 +455,21 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       playerRef.current?.stopVideo?.();
     } catch {}
     const max = settingsRef.current?.max_duration_sec ?? 360;
-    const length = item.duration_sec > 0 ? item.duration_sec + YT_WINDOW_LOAD_SEC : max + 15;
+    const length = (item.duration_sec > 0 ? item.duration_sec : max) + YT_WINDOW_SAFETY_SEC;
     closeYtWindow(ytWin.current?.win);
-    ytWin.current = { id: item.id, videoId: item.video_id, win: null, offset: startSeconds, since: null, endAt: Math.min(length, max + 15), blockedAt: null };
+    ytWin.current = { id: item.id, videoId: item.video_id, win: null, offset: startSeconds, since: null, endAt: length, blockedAt: null };
     if (onHold(settingsRef.current)) return void setYtWinState('open'); // opens when the hold ends
     ytOpenNow();
+  }
+
+  /** "Terminou" on the screen: the singer is done (the YouTube window was closed by hand). */
+  async function ytFinished() {
+    const w = ytWin.current;
+    if (!w || playingRef.current?.id !== w.id) return;
+    ytStop();
+    writeProgress(null);
+    flash('Bora pra próxima!');
+    await advance('done', w.id);
   }
 
   /** Button on the screen when Chrome blocked the window: opens it (a click is never blocked). */
@@ -1176,12 +1188,16 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             <p>
               {ytWinState === 'blocked'
                 ? 'O Chrome bloqueou a janela do YouTube. Clica no botão pra abrir.'
-                : 'Esse vídeo só toca no site do YouTube, numa janela aqui por cima. Pra pular, feche a janela do YouTube (Alt+F4) e aperte Pular.'}
+                : 'Esse vídeo só toca no site do YouTube, numa janela aqui por cima. Quando acabar, feche a janela do YouTube (Alt+F4) e clique em Terminou.'}
             </p>
             <div className="yt-window-actions">
-              {ytWinState === 'blocked' && (
+              {ytWinState === 'blocked' ? (
                 <button className="btn primary" onClick={ytBringBack}>
                   Abrir no YouTube
+                </button>
+              ) : (
+                <button className="btn primary" onClick={() => void ytFinished()}>
+                  Terminou, próxima música
                 </button>
               )}
               <button className="btn ghost" onClick={ytSwitchMode}>
