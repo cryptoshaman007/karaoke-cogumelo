@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import QRCode from 'react-qr-code';
+import { singUrlFor } from '@/lib/siteUrls';
 import AdminLogin from '@/components/AdminLogin';
 import { useAdmin } from '@/lib/useAdmin';
 import Icon from '@/components/Icon';
@@ -1271,7 +1272,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     };
   }, []);
 
-  const singUrl = origin ? `${origin}/cantar` : '';
+  const singUrl = singUrlFor(origin);
   const adminUrl = origin ? `${origin}/admin` : '';
   const nowName = playing ? singers[playing.singer_id]?.name ?? '' : '';
   const photoOf = (singerId: string | null | undefined) => (singerId ? photoUrl(singers[singerId], settings) : null);

@@ -43,7 +43,8 @@ A fila fica salva no Supabase, então fechar o navegador ou desligar o PC não p
 
 ## No bar
 
-1. No PC com Windows, abra o Chrome no endereço da Vercel (ex.: `https://karaoke-cogumelo.vercel.app`).
+1. No PC com Windows, abra o Chrome em `https://karaoke.cogumelobar.com` (o endereço antigo `https://karaoke-cogumelo.vercel.app` continua funcionando).
+   O QR do telão leva o pessoal pra `https://cantar.cogumelobar.com`, que abre direto a tela do cantor.
 2. Digite a senha do admin e clique em **Clique pra começar o karaokê** (o navegador exige um clique para liberar o som).
 3. Aperte **F11** para tela cheia.
 
@@ -78,7 +79,7 @@ Estas duas últimas precisam da migração `supabase/migrations/004_reserves_and
 Alguns canais (KaraFun e outros) não deixam o vídeo tocar fora do youtube.com. Quando chega a vez de um desses, o telão abre o youtube.com numa janela por cima da área do vídeo, e a fila continua à direita. O telão não consegue ver, fechar nem pausar essa janela (o próprio YouTube corta a ligação entre as janelas), então a fila espera: quando a música acabar, feche a janela do YouTube (Alt+F4) e clique em **Terminou, próxima música** no telão (ou Pular no admin). Se ninguém clicar, a fila anda sozinha 10 minutos depois do fim do vídeo. Deixe a reprodução automática do YouTube desligada. Pra funcionar sem clique, o Chrome do telão precisa liberar pop-ups:
 
 ```
-chrome.exe --autoplay-policy=no-user-gesture-required --disable-popup-blocking --start-fullscreen --app=https://karaoke-cogumelo.vercel.app
+chrome.exe --autoplay-policy=no-user-gesture-required --disable-popup-blocking --start-fullscreen --app=https://karaoke.cogumelobar.com
 ```
 
 (O modo `--kiosk` não deixa abrir outra janela.) Se o Chrome bloquear mesmo assim, o telão mostra o botão "Abrir no YouTube". O botão "Mostrar só o vídeo" troca pra página do YouTube só com o player. Pra voltar a recusar esses vídeos na hora da escolha, ponha `BLOCKED_VIDEOS=skip` nas variáveis da Vercel.
