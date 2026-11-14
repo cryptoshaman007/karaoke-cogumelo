@@ -10,9 +10,14 @@ let ytPromise: Promise<Yt> | null = null;
 
 async function yt(): Promise<Yt> {
   if (!ytPromise) {
-    ytPromise = import('youtubei.js').then(({ Innertube }) =>
-      Innertube.create({ lang: 'pt', location: 'BR', retrieve_player: false }),
-    );
+    ytPromise = import('youtubei.js').then(({ Innertube, Log }) => {
+      // YouTube's newer layouts make the library print pages of harmless "parsing" warnings on every
+      // search; only real errors go to the logs
+      try {
+        Log.setLevel(Log.Level.ERROR);
+      } catch {}
+      return Innertube.create({ lang: 'pt', location: 'BR', retrieve_player: false });
+    });
     ytPromise.catch(() => {
       ytPromise = null;
     });
@@ -81,22 +86,44 @@ function readItem(node: any): (SearchResult & { live: boolean }) | null {
   return null;
 }
 
+/** Pieces YouTube sends around the results, or alone when there are none. */
+const NO_RESULTS_TYPES = new Set(['BackgroundPromo', 'ShowingResultsFor', 'DidYouMean', 'SearchSubMenu', 'undefined']);
+
 /** One search, read into songs. `readable` = how many results this code could read at all. */
 async function readSearch(term: string) {
   const res = await searchOnce(term);
   const seen = new Set<string>();
   const results: SearchResult[] = [];
+  let noLength = 0; // karaoke videos whose length this code could not read
   for (const v of res.videos) {
     const item = readItem(v);
     if (!item || seen.has(item.videoId)) continue;
     seen.add(item.videoId);
     const { live, ...song } = item;
-    if (live || !song.durationSec || !KARAOKE_RE.test(song.title) || NOT_KARAOKE_RE.test(song.title)) continue;
+    if (live || !KARAOKE_RE.test(song.title) || NOT_KARAOKE_RE.test(song.title)) continue;
+    if (!song.durationSec) {
+      noLength++;
+      continue;
+    }
     results.push(song);
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const types = [...new Set(((res as any).results ?? []).map((r: { type?: string }) => r?.type))].slice(0, 5);
-  return { results, readable: seen.size, types };
+  const allTypes: string[] = [...new Set(((res as any).results ?? []).map((r: { type?: string }) => String(r?.type)))] as string[];
+  const types = allTypes.slice(0, 5);
+  // YouTube really has nothing for this search: only its "no results" pieces came back
+  const nothingThere = allTypes.every((t) => NO_RESULTS_TYPES.has(t));
+  // Read nothing although YouTube sent something, or found karaoke videos but could not read the
+  // length of any of them: YouTube changed how it sends the results (same kind of break as the
+  // empty search of before).
+  const broken = (seen.size === 0 && !nothingThere) || (results.length === 0 && noLength > 0);
+  return { results, readable: seen.size, broken, types };
+}
+
+/** YouTube answered, but in a way this code cannot read (the caller falls back to plan B). */
+export class SearchUnreadable extends Error {
+  constructor() {
+    super('search answer unreadable');
+  }
 }
 
 export async function searchKaraoke(query: string, maxDurationSec: number): Promise<SearchResult[]> {
@@ -112,17 +139,6 @@ export async function searchKaraoke(query: string, maxDurationSec: number): Prom
     let read;
     try {
       read = await readSearch(term);
-      // Nothing readable at all (a layout this code does not know yet, or an odd answer): the
-      // layout sticks to the session, so ask again right away with a brand-new one.
-      if (!read.readable && Date.now() - startedAt < 9000) {
-        console.error('search: nothing readable, trying a new session', read.types);
-        ytPromise = null;
-        read = await readSearch(term);
-        if (!read.readable) {
-          console.error('search: still nothing readable', read.types);
-          ytPromise = null;
-        }
-      }
     } catch (first) {
       console.error('search failed', first);
       try {
@@ -134,6 +150,24 @@ export async function searchKaraoke(query: string, maxDurationSec: number): Prom
         if (hit) return hit.results.filter((r) => r.durationSec <= maxDurationSec);
         throw e;
       }
+    }
+    // Nothing readable (a layout this code does not know yet, or an odd answer): the layout sticks
+    // to the session, so ask again right away with a brand-new one.
+    if (read.broken && Date.now() - startedAt < 9000) {
+      console.error('search: nothing readable, trying a new session', read.types);
+      ytPromise = null;
+      try {
+        read = await readSearch(term);
+      } catch (e) {
+        console.error('search failed', e);
+      }
+    }
+    if (read.broken) {
+      console.error('search: still nothing readable', read.types);
+      ytPromise = null;
+      // an old answer for the same search is better than nothing; otherwise the route uses plan B
+      if (hit) return hit.results.filter((r) => r.durationSec <= maxDurationSec);
+      throw new SearchUnreadable();
     }
     results = read.results;
     // an empty answer is not remembered: it may just be a hiccup

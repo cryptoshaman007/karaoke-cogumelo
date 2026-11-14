@@ -31,6 +31,8 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
   /** the last answer came from a pasted link; `karaoke` false = the title does not look like karaoke */
   const [link, setLink] = useState<{ karaoke: boolean } | null>(null);
   const [morePopular, setMorePopular] = useState(false);
+  /** YouTube's search failed and the songs came from plan B ('history' = already sung at the bar) */
+  const [fallback, setFallback] = useState<string | null>(null);
   const reqId = useRef(0);
   const box = useRef<HTMLDivElement>(null);
 
@@ -61,6 +63,7 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
     setBusy(true);
     setErr('');
     setLink(null);
+    setFallback(null);
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(term)}`, { headers: authHeaders, signal: timeoutSignal(24000) });
       const d = await res.json().catch(() => ({}));
@@ -68,6 +71,7 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
       if (!res.ok) throw new Error(d.error ?? 'A busca falhou. Tenta de novo.');
       setResults(d.results ?? []);
       if (d.fromLink) setLink({ karaoke: !!d.karaoke });
+      if (typeof d.fallback === 'string') setFallback(d.fallback);
     } catch (e) {
       const name = (e as Error).name;
       const msg = name === 'TimeoutError' || name === 'AbortError' || e instanceof TypeError ? 'A busca demorou demais. Tenta de novo.' : (e as Error).message;
@@ -120,7 +124,13 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
         </button>
       </form>
       {err && <p className="error" role="alert">{err}</p>}
-      {results && results.length === 0 && !busy && (
+      {fallback === 'history' && results && !busy && (
+        <p className="banner warn small">
+          A busca do YouTube deu uma engasgada agora. {results.length > 0 ? 'Achei essas que já cantaram aqui no Cogumelo. ' : ''}
+          Tenta de novo daqui a pouco, ou procura o karaokê no YouTube, copia o link e cola aqui em cima.
+        </p>
+      )}
+      {results && results.length === 0 && !busy && fallback !== 'history' && (
         <p className="muted empty">
           Não achei karaokê disso. Tenta o nome da música junto com o artista, ou procura o karaokê no YouTube, copia o link e cola
           aqui em cima.
