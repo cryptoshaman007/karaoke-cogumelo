@@ -373,3 +373,19 @@ input[type=search]::-webkit-search-cancel-button { display: none; }
 .score-card .avatar { width: clamp(90px, 9vw, 200px) !important; height: clamp(90px, 9vw, 200px) !important; }
 .results-screen > .avatar { width: clamp(100px, 10vw, 220px) !important; height: clamp(100px, 10vw, 220px) !important; }
 .results-screen li .avatar { width: clamp(32px, 2.6vw, 56px) !important; height: clamp(32px, 2.6vw, 56px) !important; }
+
+/* ---------- celular: próxima música em destaque, aviso da vez, nota da noite ---------- */
+.card.next-song { border: 1.5px solid var(--accent); background: linear-gradient(180deg, rgba(167, 139, 250, .14), var(--panel) 70%); }
+.next-song-title { font-size: 1.15rem; font-weight: 700; color: var(--text); }
+.next-song-sub { color: var(--text); opacity: .85; font-size: .9rem; line-height: 1.4; }
+.next-song .searchbar input { border-color: var(--accent); }
+.next-song .searchbar input::placeholder { color: #c4b5fd; opacity: .9; }
+.alert-tip { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; justify-content: space-between; padding-top: .2rem; }
+.alert-tip .muted { flex: 1 1 200px; }
+.card.night-vote { border-color: rgba(167, 139, 250, .5); }
+.night-vote .votes button.on { border-color: var(--accent); background: rgba(167, 139, 250, .16); }
+
+/* ---------- admin: grupos ---------- */
+.group-title { font-size: .72rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin: 1rem 0 -.2rem; padding-left: .2rem; }
+.add-someone { border: 1.5px solid var(--accent); }
+.add-someone summary h2 { color: var(--text); }

@@ -9,6 +9,7 @@ import { del, get, post, put, useLive } from '@/lib/useLive';
 import { selfieJpeg } from '@/lib/selfie';
 import { cleanSongTitle, drawSticker, type StickerData } from '@/lib/sticker';
 import { timeoutSignal } from '@/lib/timeout';
+import { turnAlert, unlockSound } from '@/lib/turnAlert';
 import { fmtScore, REACTIONS, SCORE_EMOJIS, SCORE_LABELS, scorePhrase, photoUrl, type QueueItem, type Reserve, type SearchResult, type Singer } from '@/lib/types';
 
 const TOKEN_KEY = 'karaoke_token';
@@ -184,6 +185,8 @@ function Room({ me, token }: { me: Singer; token: string }) {
   const contestOn = !!settings?.contest_id;
   const canInteract = self.status === 'approved';
   const rankingOn = !!settings?.ranking_enabled && !contestOn;
+  // the 5 faces show while someone sings: in the contest and in the night ranking
+  const voteOn = contestOn || rankingOn;
   const myBest = rankingOn ? ranking.find((r) => r.singer_id === me.id) ?? null : null;
   const myPos = myBest ? ranking.indexOf(myBest) + 1 : 0;
   const showReact = !!playing && canInteract && !!settings?.reactions_enabled;
@@ -205,17 +208,48 @@ function Room({ me, token }: { me: Singer; token: string }) {
     waitMin = Math.max(1, Math.round((sec + gap) / 60));
   }
 
-  // buzz the phone when the turn is coming
+  // phones only play sound after a touch: the first one anywhere on the page wakes the audio up
+  useEffect(() => {
+    const wake = () => unlockSound();
+    window.addEventListener('pointerdown', wake, { passive: true });
+    window.addEventListener('keydown', wake);
+    return () => {
+      window.removeEventListener('pointerdown', wake);
+      window.removeEventListener('keydown', wake);
+    };
+  }, []);
+
+  // buzz + chime when it is this person's turn
   const stage = entry?.status === 'playing' ? 'playing' : ahead === 0 ? 'next' : 'other';
   const prevStage = useRef(stage);
   useEffect(() => {
-    if (stage !== prevStage.current && stage !== 'other') {
-      try {
-        navigator.vibrate?.(stage === 'playing' ? [300, 120, 300, 120, 500] : [200, 100, 200]);
-      } catch {}
-    }
+    if (stage === 'playing' && prevStage.current !== 'playing') turnAlert('now');
     prevStage.current = stage;
   }, [stage]);
+
+  // ...and a first warning about 10 seconds before: when the song of whoever is singing now (plus
+  // the countdown on the telão) is about to end. It is a guess from the clock, so a pause or a skip
+  // moves it; a skip simply goes straight to the "your turn" alert above.
+  const warnedFor = useRef<number | null>(null);
+  const paused = !!settings?.paused;
+  const gapSec = settings?.intermission_sec ?? 8;
+  useEffect(() => {
+    if (ahead !== 0 || !playing?.started_at || paused || warnedFor.current === playing.id) return;
+    const started = Date.parse(playing.started_at);
+    if (!Number.isFinite(started)) return;
+    const songSec = Math.min(playing.duration_sec, maxDurationSec + 15);
+    const warnAt = started + (gapSec + songSec - 10) * 1000;
+    const id = playing.id;
+    const check = () => {
+      if (Date.now() < warnAt || warnedFor.current === id) return;
+      warnedFor.current = id;
+      turnAlert('soon');
+    };
+    check();
+    // checked every second instead of one long timer: phones stretch long timers on a locked screen
+    const t = setInterval(check, 1000);
+    return () => clearInterval(t);
+  }, [ahead, playing?.id, playing?.started_at, playing?.duration_sec, paused, gapSec, maxDurationSec]);
 
   // songs left in reserve: they join the end of the queue after this person's current song
   const [reserves, setReserves] = useState<Reserve[]>([]);
@@ -365,62 +399,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
       )}
       {err && <p className="error" role="alert">{err}</p>}
 
-      {lastSong && entry?.status !== 'playing' && (
-        <section className="card sticker-ready">
-          <span className="label">🎉 Mandou bem!</span>
-          <p>
-            {lastSong.score != null
-              ? `A galera te deu ${fmtScore(lastSong.score)}. ${scorePhrase(lastSong.score)}`
-              : 'Sua figurinha de quem cantou no Cogumelo tá pronta.'}
-          </p>
-          <div className="btns">
-            <button
-              className="btn primary"
-              onClick={() => setSticker({ name: self.name, title: lastSong.title, score: lastSong.score, photo: myPhoto })}
-            >
-              Ver minha figurinha
-            </button>
-            <button className="btn ghost" onClick={forgetLastSong}>
-              Agora não
-            </button>
-          </div>
-        </section>
-      )}
-
-      {photosOn && self.status !== 'blocked' && <SelfieCard
-          token={token}
-          photo={myPhoto}
-          onChange={async (photoAt) => {
-            setOwnPhotoAt(photoAt);
-            await refresh();
-          }}
-        />}
-
-      {results && (
-        <section className="card contest">
-          <span className="label">🏆 Resultado do campeonato</span>
-          {results[0]?.score != null && (
-            <p className="big-msg">
-              {results[0].name} levou a melhor! 🎉
-            </p>
-          )}
-          <Ranking rows={results} limit={10} highlightFirst />
-        </section>
-      )}
-
-      {contestOn && playing && playing.singer_id === me.id && (
-        <section className="card contest">
-          <span className="label">🏆 Campeonato valendo</span>
-          <p>A galera tá dando nota pra você agora. Capricha!</p>
-        </section>
-      )}
-      {contestOn && playing && playing.singer_id !== me.id && canInteract && (
-        <VoteCard token={token} playing={playing} performer={singers[playing.singer_id]?.name ?? 'quem tá cantando'} />
-      )}
-      {contestOn && !playing && (
-        <p className="banner contest-banner">🏆 Campeonato valendo! Dá sua nota pra cada um enquanto canta.</p>
-      )}
-
+      {/* 1. Sua música e a busca: o principal da tela */}
       {self.status !== 'blocked' && entry && (
         <section className={`card mysong ${stage}`}>
           <span className="label">
@@ -448,6 +427,20 @@ function Room({ me, token }: { me: Singer; token: string }) {
               )}
             </div>
           ) : null}
+          {entry.status === 'waiting' && self.status === 'approved' && (
+            <div className="alert-tip">
+              <span className="muted small">📳🔔 O celular vibra e toca um sininho uns 10 s antes da sua vez e de novo na hora. Deixa essa tela aberta.</span>
+              <button
+                className="btn ghost small"
+                onClick={() => {
+                  unlockSound();
+                  turnAlert('soon');
+                }}
+              >
+                Testar o som
+              </button>
+            </div>
+          )}
           {entry.status === 'waiting' && !swapping && (
             <div className="btns">
               <button className="btn ghost" onClick={() => setSwapping(true)}>
@@ -490,12 +483,13 @@ function Room({ me, token }: { me: Singer; token: string }) {
       )}
 
       {canReserve && (
-        <section>
-          <h2 className="section-title">Quer deixar mais uma escolhida?</h2>
-          <SongSearch authHeaders={{ 'x-singer-token': token }} maxDurationSec={maxDurationSec} pickLabel="Guardar" onPick={add} />
-          <p className="muted small hint">
-            Ela fica de reserva e entra no fim da fila depois que você cantar. Até {maxSongs} músicas por pessoa.
+        <section className="card next-song">
+          <h2 className="next-song-title">➕ Bora escolher a próxima?</h2>
+          <p className="next-song-sub">
+            Dá pra deixar mais {maxSongs - 1 - reserves.length === 1 ? 'uma música guardada' : `${maxSongs - 1 - reserves.length} músicas guardadas`}. Ela entra no fim da fila
+            depois que você cantar.
           </p>
+          <SongSearch authHeaders={{ 'x-singer-token': token }} maxDurationSec={maxDurationSec} pickLabel="Guardar" onPick={add} />
         </section>
       )}
 
@@ -518,6 +512,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
         </section>
       )}
 
+      {/* 2. A fila */}
       {(playing || line.length > 0) && (
         <section className="card">
           <span className="label">A fila agora</span>
@@ -547,6 +542,59 @@ function Room({ me, token }: { me: Singer; token: string }) {
         </section>
       )}
 
+      {/* 3. Nota, ranking, figurinha e selfie */}
+      {voteOn && playing && playing.singer_id === me.id && (
+        <section className={`card ${contestOn ? 'contest' : 'night-vote'}`}>
+          <span className="label">{contestOn ? '🏆 Campeonato valendo' : '⭐ Valendo nota'}</span>
+          <p>A galera tá dando nota pra você agora. Capricha!</p>
+        </section>
+      )}
+      {voteOn && playing && playing.singer_id !== me.id && canInteract && (
+        <VoteCard
+          token={token}
+          playing={playing}
+          contest={contestOn}
+          performer={singers[playing.singer_id]?.name ?? 'quem tá cantando'}
+        />
+      )}
+      {contestOn && !playing && (
+        <p className="banner contest-banner">🏆 Campeonato valendo! Dá sua nota pra cada um enquanto canta.</p>
+      )}
+
+      {lastSong && entry?.status !== 'playing' && (
+        <section className="card sticker-ready">
+          <span className="label">🎉 Mandou bem!</span>
+          <p>
+            {lastSong.score != null
+              ? `A galera te deu ${fmtScore(lastSong.score)}. ${scorePhrase(lastSong.score)}`
+              : 'Sua figurinha de quem cantou no Cogumelo tá pronta.'}
+          </p>
+          <div className="btns">
+            <button
+              className="btn primary"
+              onClick={() => setSticker({ name: self.name, title: lastSong.title, score: lastSong.score, photo: myPhoto })}
+            >
+              Ver minha figurinha
+            </button>
+            <button className="btn ghost" onClick={forgetLastSong}>
+              Agora não
+            </button>
+          </div>
+        </section>
+      )}
+
+      {results && (
+        <section className="card contest">
+          <span className="label">🏆 Resultado do campeonato</span>
+          {results[0]?.score != null && (
+            <p className="big-msg">
+              {results[0].name} levou a melhor! 🎉
+            </p>
+          )}
+          <Ranking rows={results} limit={10} highlightFirst />
+        </section>
+      )}
+
       {rankingOn && (
         <section className="card">
           <span className="label">⭐ Ranking da noite</span>
@@ -559,19 +607,27 @@ function Room({ me, token }: { me: Singer; token: string }) {
             rows={ranking}
             limit={5}
             highlightFirst
-            unit="reactions"
             mine={(r) => r.singer_id === me.id}
             photo={(r) => (r.singer_id ? photoOf(r.singer_id) : null)}
-            empty="Ninguém pontuou ainda. A nota sai das reações da galera no fim de cada música."
+            empty="Ninguém pontuou ainda. Enquanto alguém canta, aparecem 5 carinhas aqui pra você dar a nota."
           />
           {myBest?.score != null && (
             <button className="btn" onClick={() => setSticker({ name: self.name, title: myBest.title, score: myBest.score, photo: myPhoto })}>
               Figurinha da minha nota
             </button>
           )}
-          {ranking.length > 0 && <span className="muted small">Quanto mais gente reagir enquanto você canta, maior a nota.</span>}
+          {ranking.length > 0 && <span className="muted small">A nota é a média das carinhas que a galera escolhe enquanto você canta.</span>}
         </section>
       )}
+
+      {photosOn && self.status !== 'blocked' && <SelfieCard
+          token={token}
+          photo={myPhoto}
+          onChange={async (photoAt) => {
+            setOwnPhotoAt(photoAt);
+            await refresh();
+          }}
+        />}
 
       {(showReact || showGif) && (
         <ReactionBar token={token} reactions={showReact} gifs={showGif} gifSent={gifSent} onGif={() => (setGifSent(false), setGifOpen(true))} />
@@ -738,8 +794,12 @@ function StickerSheet({ data, onClose }: { data: StickerData; onClose: () => voi
   );
 }
 
-/** Contest mode: five faces, from "off key" to "nailed it". The vote can be changed until the song ends. */
-function VoteCard({ token, playing, performer }: { token: string; playing: QueueItem; performer: string }) {
+/**
+ * Five faces, from "off key" to "nailed it", for whoever is singing. Used by the contest and by the
+ * night ranking (there the grade is the average of the faces, on a 0 to 10 scale). The vote can be
+ * changed until the song ends.
+ */
+function VoteCard({ token, playing, performer, contest }: { token: string; playing: QueueItem; performer: string; contest: boolean }) {
   const [vote, setVote] = useState<number | null>(null);
   const [err, setErr] = useState('');
 
@@ -774,8 +834,8 @@ function VoteCard({ token, playing, performer }: { token: string; playing: Queue
   }
 
   return (
-    <section className="card contest">
-      <span className="label">🏆 Campeonato · sua nota</span>
+    <section className={`card ${contest ? 'contest' : 'night-vote'}`}>
+      <span className="label">{contest ? '🏆 Campeonato · sua nota' : '⭐ Ranking da noite · sua nota'}</span>
       <p>
         E aí, o que você tá achando de <strong>{performer}</strong>?
       </p>

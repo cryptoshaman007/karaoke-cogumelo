@@ -5,7 +5,7 @@ import { fail, json, readBody } from '@/lib/http';
 
 export const dynamic = 'force-dynamic';
 
-/** Contest mode: a customer scores (1-5) whoever is singing right now. Can be changed until the song ends. */
+/** Contest or night ranking: a customer scores (1-5) whoever is singing right now. Can be changed until the song ends. */
 export async function POST(req: NextRequest) {
   const token = req.headers.get('x-singer-token');
   if (!token || token.length > 100) return fail('Entre com seu nome primeiro', 401);
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
     case 'idle':
       return fail('A música acabou, então a votação dessa já fechou.', 409);
     case 'no_contest':
-      return fail('O campeonato não tá valendo agora.', 409);
+      return fail('A votação não tá valendo agora.', 409);
     case 'pending':
       return fail('Só um instante: o admin ainda vai liberar sua entrada pra você votar.', 403);
     case 'unknown':

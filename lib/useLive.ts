@@ -62,9 +62,9 @@ export function useLive({ admin = false, selfId = null, tv = false }: Options = 
     // night ranking: the graded songs of this night. A failure here only leaves the ranking as it was.
     let graded: QueueItem[] | null = norm && !norm.ranking_enabled ? [] : null;
     if (norm?.ranking_enabled) {
-      let rq = sb.from('queue').select('id, singer_id, title, video_id, score, reaction_count').not('score', 'is', null);
+      let rq = sb.from('queue').select('id, singer_id, title, video_id, score, vote_count').not('score', 'is', null);
       if (norm.night_started_at) rq = rq.gte('started_at', norm.night_started_at);
-      const rk = await rq.order('score', { ascending: false }).order('reaction_count', { ascending: false }).order('id').limit(RANKING_SIZE);
+      const rk = await rq.order('score', { ascending: false }).order('vote_count', { ascending: false, nullsFirst: false }).order('id').limit(RANKING_SIZE);
       if (!rk.error && rk.data) graded = rk.data as QueueItem[];
     }
     const ids = [...new Set(rows.map((r) => r.singer_id).concat(selfId ? [selfId] : [], (graded ?? []).map((g) => g.singer_id)))];
@@ -112,7 +112,7 @@ export function useLive({ admin = false, selfId = null, tv = false }: Options = 
         name: map[g.singer_id]?.name ?? '…',
         title: g.title,
         video_id: g.video_id,
-        votes: g.reaction_count ?? 0,
+        votes: g.vote_count ?? 0,
         score: g.score == null ? null : Number(g.score),
       }));
       const rks = JSON.stringify(list);

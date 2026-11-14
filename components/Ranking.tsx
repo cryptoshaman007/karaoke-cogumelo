@@ -5,8 +5,6 @@ interface Props {
   rows: Standing[];
   limit?: number;
   highlightFirst?: boolean;
-  /** what the small number under the grade counts: contest votes or night-ranking reactions */
-  unit?: 'votes' | 'reactions';
   empty?: string;
   /** rows to paint as "this is you" */
   mine?: (row: Standing) => boolean;
@@ -15,10 +13,9 @@ interface Props {
 }
 
 /** Ranking: one row per performance, best grade first. Used by the contest and by the night ranking. */
-export default function Ranking({ rows, limit = 50, highlightFirst = false, unit = 'votes', empty, mine, photo }: Props) {
+export default function Ranking({ rows, limit = 50, highlightFirst = false, empty, mine, photo }: Props) {
   if (rows.length === 0) return <p className="muted">{empty ?? 'Ninguém cantou ainda nesse campeonato.'}</p>;
-  const count = (n: number) =>
-    unit === 'votes' ? (n === 1 ? '1 voto' : `${n} votos`) : n === 1 ? '1 reação' : `${n} reações`;
+  const count = (n: number) => (n === 1 ? '1 voto' : `${n} votos`);
   return (
     <ol className="ranking">
       {rows.slice(0, limit).map((r, i) => {

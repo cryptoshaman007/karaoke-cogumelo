@@ -21,9 +21,11 @@ export interface QueueItem {
   position: number;
   created_at: string;
   started_at: string | null;
-  /** nota do ranking da noite (5,0 a 10,0), calculada pelo banco quando a música termina */
+  /** nota do ranking da noite (0 a 10: média das 5 carinhas x 2), calculada pelo banco quando a música termina */
   score?: number | null;
   reaction_count?: number | null;
+  /** ranking da noite: quantas pessoas deram nota (5 carinhas) pra essa música */
+  vote_count?: number | null;
 }
 
 export interface Settings {
@@ -45,7 +47,7 @@ export interface Settings {
   /** campeonato encerrado cujo resultado está no telão */
   results_contest_id: number | null;
   reactions_enabled: boolean;
-  /** ranking da noite: nota no fim de cada música, pelas reações */
+  /** ranking da noite: nota no fim de cada música, pelos votos (5 carinhas) da galera */
   ranking_enabled: boolean;
   /** ranking da noite aberto no telão */
   ranking_on_tv: boolean;
@@ -122,7 +124,7 @@ export interface PopularSong extends SearchResult {
 
 /**
  * One performance in a ranking (best first). Contest: `score` is the average of the 1-5 votes.
- * Night ranking: `score` is the 5-10 grade from the reactions and `votes` is how many reactions.
+ * Night ranking: `score` is the 0-10 grade (average of the 1-5 faces, doubled) and `votes` is how many people voted.
  */
 export interface Standing {
   queue_id: number;
@@ -214,8 +216,8 @@ export function scorePhrase(score: number): string {
   if (score >= 8.5) return 'Arrasou demais!';
   if (score >= 7.5) return 'Mandou muito bem!';
   if (score >= 6.5) return 'Mandou bem!';
-  if (score >= 5.5) return 'Valeu a coragem!';
-  return 'A plateia tava tímida…';
+  if (score >= 5) return 'Valeu a coragem!';
+  return 'O importante é se divertir! 😅';
 }
 
 /** Address of a person's selfie, or null when there is none (or photos are off). */

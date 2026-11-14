@@ -11,7 +11,7 @@ const FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 export interface StickerData {
   name: string;
   title: string;
-  /** night-ranking grade (5 to 10), or null when there is no grade */
+  /** night-ranking grade (0 to 10), or null when there is no grade */
   score: number | null;
   /** selfie address (same site), or null */
   photo: string | null;
