@@ -417,7 +417,9 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   /** Opens the YouTube window for the song (again, at the point it was). False when Chrome blocked it. */
   function ytOpenNow(): boolean {
     const w = ytWin.current;
-    if (!w) return false;
+    // Once YouTube loads, Chrome cuts this page's link to the window (YouTube asks for that), so it
+    // can no longer be closed or reused from here: opening again would play the song twice.
+    if (!w || w.win) return false;
     const at = ytElapsed();
     const win = openYtWindow(holderRef.current, w.videoId, at, ytModeRef.current);
     w.offset = at;
@@ -434,16 +436,6 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     setYtWinState('open');
     flash('');
     return true;
-  }
-
-  /** Shuts the window but remembers the point (admin paused, ranking on screen). */
-  function ytPause() {
-    const w = ytWin.current;
-    if (!w || w.since == null) return;
-    w.offset = ytElapsed();
-    w.since = null;
-    closeYtWindow(w.win);
-    w.win = null;
   }
 
   /** Done with the YouTube window (song over, skipped, another song). */
@@ -468,21 +460,16 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     ytOpenNow();
   }
 
-  /** Button on the screen: brings the window back in front, or opens it (a click is never blocked). */
+  /** Button on the screen when Chrome blocked the window: opens it (a click is never blocked). */
   function ytBringBack() {
-    const w = ytWin.current;
-    if (!w) return;
-    if (w.win && !w.win.closed) return focusYtWindow(w.win);
-    if (!onHold(settingsRef.current)) ytOpenNow();
+    if (ytWin.current && !ytWin.current.win) ytOpenNow();
   }
 
   function ytSwitchMode() {
     const mode: YtWindowMode = ytModeRef.current === 'page' ? 'video' : 'page';
     ytModeRef.current = mode;
     setYtMode(mode);
-    saveYtMode(mode);
-    const w = ytWin.current;
-    if (w && w.since != null) ytOpenNow();
+    saveYtMode(mode); // used from the next window on
   }
 
   function clearIntro() {
@@ -705,7 +692,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       playerReady.current = false;
       loadedVideo.current = null;
       videoStarted.current = false;
-      ytStop(); // a rebuilt player opens it again from the saved point
+      // the YouTube window is left alone: a rebuilt player must not open it a second time
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started, ytControls, isOwner]);
@@ -909,8 +896,8 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const hold = onHold(settings);
   useEffect(() => {
     if (ytWin.current) {
-      if (hold) ytPause();
-      else if (ytWin.current.since == null && ytWin.current.blockedAt == null) ytOpenNow();
+      // the window cannot be paused from here: only one that waited for the hold opens now
+      if (!hold && !ytWin.current.win && ytWin.current.blockedAt == null) ytOpenNow();
       return;
     }
     const p = playerRef.current;
@@ -957,16 +944,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     const prev = lastRestart.current;
     lastRestart.current = settings.restart_at;
     if (prev === undefined || prev === settings.restart_at) return; // first load, or nothing new
-    const w = ytWin.current;
-    if (w) {
-      writeProgress(null);
-      w.offset = 0;
-      if (w.since != null) {
-        w.since = Date.now();
-        ytOpenNow();
-      }
-      return;
-    }
+    if (ytWin.current) return; // the YouTube window cannot be restarted from here
     const p = playerRef.current;
     if (!p || !playerReady.current || !videoStarted.current) return;
     writeProgress(null);
@@ -1011,21 +989,15 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       // playing in the YouTube window: the song's clock decides when it is over
       const w = ytWin.current;
       if (w && w.id === cur.id) {
-        if (onHold(settingsRef.current)) return void ytPause();
         if (w.since == null) {
-          if (w.blockedAt == null) return void ytOpenNow(); // the hold just ended
+          if (w.blockedAt == null) return void (onHold(settingsRef.current) || ytOpenNow()); // waited for a hold
           if (Date.now() - w.blockedAt < YT_WINDOW_BLOCKED_SKIP_MS) return;
           ytStop();
           flash('A janela do YouTube não abriu. Vamos pro próximo!');
           writeProgress(null);
           return void advance('skipped', cur.id);
         }
-        if (w.win?.closed) {
-          // someone closed the YouTube window by hand: same as Pular
-          ytStop();
-          writeProgress(null);
-          return void advance('skipped', cur.id);
-        }
+        // never trust w.win.closed: Chrome reports the window as closed as soon as YouTube loads
         const at = ytElapsed();
         if (at < w.endAt) return void writeProgress({ id: cur.id, t: at });
         ytStop();
@@ -1204,14 +1176,16 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             <p>
               {ytWinState === 'blocked'
                 ? 'O Chrome bloqueou a janela do YouTube. Clica no botão pra abrir.'
-                : 'Esse vídeo só toca no site do YouTube, então ele abre numa janela aqui por cima.'}
+                : 'Esse vídeo só toca no site do YouTube, numa janela aqui por cima. Pra pular, feche a janela do YouTube (Alt+F4) e aperte Pular.'}
             </p>
             <div className="yt-window-actions">
-              <button className="btn primary" onClick={ytBringBack}>
-                {ytWinState === 'blocked' ? 'Abrir no YouTube' : 'Trazer o YouTube pra frente'}
-              </button>
+              {ytWinState === 'blocked' && (
+                <button className="btn primary" onClick={ytBringBack}>
+                  Abrir no YouTube
+                </button>
+              )}
               <button className="btn ghost" onClick={ytSwitchMode}>
-                {ytMode === 'page' ? 'Mostrar só o vídeo' : 'Mostrar a página do YouTube'}
+                {ytMode === 'page' ? 'Próximas: só o vídeo' : 'Próximas: página do YouTube'}
               </button>
             </div>
           </div>
