@@ -7,14 +7,16 @@ import Avatar from '@/components/Avatar';
 import { browserClient } from '@/lib/supabase-browser';
 import { del, get, post, put, useLive } from '@/lib/useLive';
 import { selfieJpeg } from '@/lib/selfie';
-import { cleanSongTitle, drawSticker, type StickerData } from '@/lib/sticker';
+import { cleanSongTitle, drawNightSticker, nightHeadline, STICKER_THEMES } from '@/lib/sticker';
+import { SUGGESTIONS } from '@/lib/suggestions';
 import { timeoutSignal } from '@/lib/timeout';
 import { turnAlert, unlockSound } from '@/lib/turnAlert';
-import { fmtScore, REACTIONS, SCORE_EMOJIS, SCORE_LABELS, scorePhrase, photoUrl, type QueueItem, type Reserve, type SearchResult, type Singer } from '@/lib/types';
+import { fmtScore, REACTIONS, SCORE_EMOJIS, SCORE_LABELS, scorePhrase, photoUrl, type NightSong, type QueueItem, type Reserve, type SearchResult, type Singer } from '@/lib/types';
 
 const TOKEN_KEY = 'karaoke_token';
 const LAST_SONG_KEY = 'karaoke_last_song';
 const SELFIE_SKIP_KEY = 'karaoke_selfie_skip';
+const THEME_KEY = 'karaoke_sticker_theme';
 
 function readToken() {
   try {
@@ -311,7 +313,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
 
   // The song this person just finished: offers the "figurinha" with the crowd's grade.
   const [lastSong, setLastSong] = useState<{ queueId: number; title: string; at: number; score: number | null; night?: string | null } | null>(null);
-  const [sticker, setSticker] = useState<StickerData | null>(null);
+  const [stickerOpen, setStickerOpen] = useState(false);
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LAST_SONG_KEY);
@@ -363,6 +365,31 @@ function Room({ me, token }: { me: Singer; token: string }) {
     } catch {}
   }
 
+  // Tonight's songs, best first, for the "figurinha da noite". Asked again when a song of this
+  // person ends or gets its grade, when the night is reset, and every couple of minutes.
+  const [nightSongs, setNightSongs] = useState<NightSong[]>([]);
+  const loadNight = useCallback(async () => {
+    try {
+      const d = await get('/api/my-night', { 'x-singer-token': token });
+      if (Array.isArray(d?.songs)) setNightSongs(d.songs);
+    } catch {}
+  }, [token]);
+  useEffect(() => {
+    void loadNight();
+    const t = setInterval(loadNight, 120000);
+    return () => clearInterval(t);
+  }, [loadNight, lastSong?.queueId, lastSong?.score, settings?.night_started_at]);
+  // the song that just ended may not be in the answer yet: it goes in with what the phone knows
+  const songsForSticker: NightSong[] = (() => {
+    if (!lastSong || nightSongs.some((n) => n.id === lastSong.queueId)) return nightSongs;
+    const extra: NightSong = { id: lastSong.queueId, title: lastSong.title, score: lastSong.score, votes: 0, reactions: 0 };
+    return [...nightSongs, extra].sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || b.reactions - a.reactions || b.id - a.id);
+  })();
+
+  // a song from the suggestions at the end of the page goes to the search that is on screen
+  const [preset, setPreset] = useState<{ text: string; n: number } | null>(null);
+  const searchOnScreen = self.status !== 'blocked' && ((!entry && open) || canReserve);
+
   // "Zerar a noite": last night's grade card and the selfie this phone remembers go away (the
   // selfie itself was deleted on the server), without waiting for the page to be reloaded.
   const nightAt = settings?.night_started_at ? Date.parse(settings.night_started_at) : 0;
@@ -371,6 +398,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
     // the night it was sung (compared as text: the phone's clock may be off), or its time for older cards
     const oldNight = lastSong?.night ? lastSong.night !== settings?.night_started_at : !!lastSong && lastSong.at < nightAt;
     if (oldNight) forgetLastSong();
+    if (oldNight) setNightSongs([]);
     if (ownPhotoAt && Date.parse(ownPhotoAt) < nightAt) setOwnPhotoAt(null);
   }, [nightAt, lastSong, ownPhotoAt]);
 
@@ -489,7 +517,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
             Dá pra deixar mais {maxSongs - 1 - reserves.length === 1 ? 'uma música guardada' : `${maxSongs - 1 - reserves.length} músicas guardadas`}. Ela entra no fim da fila
             depois que você cantar.
           </p>
-          <SongSearch authHeaders={{ 'x-singer-token': token }} maxDurationSec={maxDurationSec} pickLabel="Guardar" onPick={add} />
+          <SongSearch authHeaders={{ 'x-singer-token': token }} maxDurationSec={maxDurationSec} pickLabel="Guardar" onPick={add} preset={preset} />
         </section>
       )}
 
@@ -505,6 +533,7 @@ function Room({ me, token }: { me: Singer; token: string }) {
             pickLabel="Cantar"
             onPick={add}
             showPopular
+            preset={preset}
           />
           <p className="muted small hint">
             Versão karaokê, de até {Math.floor(maxDurationSec / 60)} minutos. Uma música por vez, pra todo mundo cantar.
@@ -567,12 +596,12 @@ function Room({ me, token }: { me: Singer; token: string }) {
           <p>
             {lastSong.score != null
               ? `A galera te deu ${fmtScore(lastSong.score)}. ${scorePhrase(lastSong.score)}`
-              : 'Sua figurinha de quem cantou no Cogumelo tá pronta.'}
+              : 'Sua figurinha da noite já tá com essa música.'}
           </p>
           <div className="btns">
             <button
               className="btn primary"
-              onClick={() => setSticker({ name: self.name, title: lastSong.title, score: lastSong.score, photo: myPhoto })}
+              onClick={() => setStickerOpen(true)}
             >
               Ver minha figurinha
             </button>
@@ -611,9 +640,9 @@ function Room({ me, token }: { me: Singer; token: string }) {
             photo={(r) => (r.singer_id ? photoOf(r.singer_id) : null)}
             empty="Ninguém pontuou ainda. Enquanto alguém canta, aparecem 5 carinhas aqui pra você dar a nota."
           />
-          {myBest?.score != null && (
-            <button className="btn" onClick={() => setSticker({ name: self.name, title: myBest.title, score: myBest.score, photo: myPhoto })}>
-              Figurinha da minha nota
+          {myBest?.score != null && songsForSticker.length > 0 && (
+            <button className="btn" onClick={() => setStickerOpen(true)}>
+              Ver minha figurinha da noite
             </button>
           )}
           {ranking.length > 0 && <span className="muted small">A nota é a média das carinhas que a galera escolhe enquanto você canta.</span>}
@@ -629,6 +658,15 @@ function Room({ me, token }: { me: Singer; token: string }) {
           }}
         />}
 
+      {/* 4. Figurinha da noite e sugestões: o fim da tela */}
+      {self.status !== 'blocked' && (
+        <NightStickerCard songs={songsForSticker} singing={entry?.status === 'playing'} onOpen={() => setStickerOpen(true)} />
+      )}
+
+      {searchOnScreen && (
+        <Suggestions onPick={(text) => setPreset((p) => ({ text, n: (p?.n ?? 0) + 1 }))} />
+      )}
+
       {(showReact || showGif) && (
         <ReactionBar token={token} reactions={showReact} gifs={showGif} gifSent={gifSent} onGif={() => (setGifSent(false), setGifOpen(true))} />
       )}
@@ -643,7 +681,9 @@ function Room({ me, token }: { me: Singer; token: string }) {
           }}
         />
       )}
-      {sticker && <StickerSheet data={sticker} onClose={() => setSticker(null)} />}
+      {stickerOpen && songsForSticker.length > 0 && (
+        <StickerSheet name={self.name} photo={myPhoto} songs={songsForSticker} onClose={() => setStickerOpen(false)} />
+      )}
     </main>
   );
 }
@@ -731,34 +771,100 @@ function SelfieCard({ token, photo, onChange }: { token: string; photo: string |
   );
 }
 
-/** The "figurinha": an image with the name, the song and the crowd's grade, to share. */
-function StickerSheet({ data, onClose }: { data: StickerData; onClose: () => void }) {
+/** Theme of the sticker, remembered on this phone. */
+function useStickerTheme(): [number, () => void] {
+  const [theme, setTheme] = useState(0);
+  useEffect(() => {
+    try {
+      const n = Number(localStorage.getItem(THEME_KEY));
+      if (Number.isInteger(n) && n >= 0 && n < STICKER_THEMES.length) setTheme(n);
+    } catch {}
+  }, []);
+  const next = () =>
+    setTheme((t) => {
+      const n = (t + 1) % STICKER_THEMES.length;
+      try {
+        localStorage.setItem(THEME_KEY, String(n));
+      } catch {}
+      return n;
+    });
+  return [theme, next];
+}
+
+/** End of the page: the night's sticker so far (top 3), updating itself as the person sings. */
+function NightStickerCard({ songs, singing, onOpen }: { songs: NightSong[]; singing: boolean; onOpen: () => void }) {
+  const top = songs.slice(0, 3);
+  return (
+    <section className="card night-sticker">
+      <span className="label">🌟 Sua figurinha da noite</span>
+      {top.length === 0 ? (
+        <p className="muted small">
+          {singing
+            ? 'Canta com vontade: quando acabar, essa música entra aqui na sua figurinha.'
+            : 'Canta uma e ela aparece aqui: "Estive no Cogumelo Bar e cantei...", com suas 3 melhores da noite. Atualiza sozinha!'}
+        </p>
+      ) : (
+        <>
+          <strong className="night-head">{nightHeadline(songs)}</strong>
+          <ol className="night-top">
+            {top.map((s, i) => (
+              <li key={s.id}>
+                <span className="medal" aria-hidden="true">
+                  {top.length > 1 ? ['🥇', '🥈', '🥉'][i] : '🎤'}
+                </span>
+                <span className="grow">{cleanSongTitle(s.title)}</span>
+                {s.score != null ? (
+                  <b>{fmtScore(s.score)}</b>
+                ) : s.reactions > 0 ? (
+                  <span className="muted small">🔥 {s.reactions}</span>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+          {songs.length > 3 && <span className="muted small">e mais {songs.length - 3} na conta. Ficam as 3 melhores pela nota e pelas reações.</span>}
+          <button className="btn primary" onClick={onOpen}>
+            Ver e compartilhar
+          </button>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** "Figurinha da noite": the image with the 3 best songs, to share. Redrawn when the songs change. */
+function StickerSheet({ name, photo, songs, onClose }: { name: string; photo: string | null; songs: NightSong[]; onClose: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [err, setErr] = useState('');
+  const [theme, nextTheme] = useStickerTheme();
+  // redraw only when something on the image changes
+  const key = JSON.stringify([name, photo, theme, songs.slice(0, 3).map((s) => [s.id, s.score, s.reactions, s.title]), songs.length]);
   useEffect(() => {
     let stop = false;
     let made: string | null = null;
-    drawSticker(data)
+    drawNightSticker({ name, photo, songs, theme })
       .then((blob) => {
         if (stop) return;
-        const slug = cleanSongTitle(data.title).normalize('NFD').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40).toLowerCase();
+        const slug = name.normalize('NFD').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30).toLowerCase();
         setFile(new File([blob], `cogumelo-${slug || 'karaoke'}.png`, { type: 'image/png' }));
         made = URL.createObjectURL(blob);
         setUrl(made);
+        setErr('');
       })
       .catch((e) => !stop && setErr((e as Error).message));
     return () => {
       stop = true;
       if (made) URL.revokeObjectURL(made);
     };
-  }, [data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
 
   const canShare = !!file && typeof navigator !== 'undefined' && !!navigator.canShare?.({ files: [file] });
   async function share() {
     if (!file) return;
+    const first = cleanSongTitle(songs[0]?.title ?? '');
     try {
-      await navigator.share({ files: [file], text: 'Soltei a voz no karaokê do Cogumelo Bar! 🎤🍄' });
+      await navigator.share({ files: [file], text: `Estive no Cogumelo Bar e cantei ${first ? `"${first}"` : 'no karaokê'}! 🎤🍄` });
     } catch (e) {
       if ((e as Error).name !== 'AbortError') setErr('Não deu pra compartilhar. Usa o botão de salvar.');
     }
@@ -768,13 +874,13 @@ function StickerSheet({ data, onClose }: { data: StickerData; onClose: () => voi
     <div className="sheet-back" onClick={onClose}>
       <div className="sheet sticker-sheet" role="dialog" aria-label="Sua figurinha" onClick={(e) => e.stopPropagation()}>
         <div className="sheet-head">
-          <strong>Sua figurinha</strong>
+          <strong>Sua figurinha da noite</strong>
           <button className="btn small icon-only ghost" aria-label="Fechar" onClick={onClose}>
             ✕
           </button>
         </div>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        {url ? <img className="sticker-img" src={url} alt="Figurinha com seu nome e sua nota" /> : !err && <span className="spinner big" />}
+        {url ? <img className="sticker-img" src={url} alt="Figurinha com seu nome e suas melhores músicas da noite" /> : !err && <span className="spinner big" />}
         {err && <p className="error" role="alert">{err}</p>}
         <div className="btns">
           {canShare && (
@@ -787,10 +893,57 @@ function StickerSheet({ data, onClose }: { data: StickerData; onClose: () => voi
               Salvar imagem
             </a>
           )}
+          <button className="btn ghost" onClick={nextTheme}>
+            🎨 Trocar a cor
+          </button>
         </div>
-        <span className="muted small">Posta no story e marca o Cogumelo! 🍄</span>
+        <span className="muted small">Ela se atualiza sozinha a cada música que você canta hoje. Posta no story e marca o Cogumelo! 🍄</span>
       </div>
     </div>
+  );
+}
+
+/** Last thing on the page: song ideas by style. A tap fills in the search with that song. */
+function Suggestions({ onPick }: { onPick: (text: string) => void }) {
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const cat = SUGGESTIONS.find((c) => c.key === openKey) ?? null;
+  return (
+    <section className="card suggestions">
+      <span className="label">💡 Sem ideia do que cantar?</span>
+      <div className="cat-chips" role="tablist" aria-label="Estilos">
+        {SUGGESTIONS.map((c) => (
+          <button
+            key={c.key}
+            role="tab"
+            aria-selected={openKey === c.key}
+            className={`cat-chip${openKey === c.key ? ' on' : ''}`}
+            onClick={() => setOpenKey((k) => (k === c.key ? null : c.key))}
+          >
+            <span aria-hidden="true">{c.emoji}</span> {c.name}
+          </button>
+        ))}
+      </div>
+      {cat ? (
+        <>
+          <span className="muted small">{cat.blurb}</span>
+          <ul className="rows sugg-list">
+            {cat.songs.map((s) => (
+              <li key={`${s.title}-${s.artist}`}>
+                <div className="grow">
+                  <strong>{s.title}</strong>
+                  <span className="muted small">{s.artist}</span>
+                </div>
+                <button className="btn small" onClick={() => onPick(`${s.title} ${s.artist}`)}>
+                  Achar
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <span className="muted small">Toca num estilo pra ver umas ideias. Ao escolher, a gente já procura o karaokê lá em cima.</span>
+      )}
+    </section>
   );
 }
 

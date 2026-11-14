@@ -15,9 +15,13 @@ interface Props {
   onPick: (song: SearchResult) => Promise<void>;
   disabled?: boolean;
   showPopular?: boolean;
+  /** a search to run from outside (the suggestions at the end of the page); `n` changes on every tap */
+  preset?: { text: string; n: number } | null;
 }
 
-export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onPick, disabled, showPopular }: Props) {
+const POPULAR_FIRST = 4;
+
+export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onPick, disabled, showPopular, preset }: Props) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [popular, setPopular] = useState<PopularSong[]>([]);
@@ -26,7 +30,9 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
   const [picking, setPicking] = useState<string | null>(null);
   /** the last answer came from a pasted link; `karaoke` false = the title does not look like karaoke */
   const [link, setLink] = useState<{ karaoke: boolean } | null>(null);
+  const [morePopular, setMorePopular] = useState(false);
   const reqId = useRef(0);
+  const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!showPopular) return;
@@ -35,6 +41,17 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
       .then((d) => setPopular(Array.isArray(d.songs) ? d.songs : []))
       .catch(() => {});
   }, [showPopular]);
+
+  // a suggestion was tapped: fill in the search, run it and bring it into view
+  const presetSeen = useRef(preset?.n);
+  useEffect(() => {
+    if (!preset || presetSeen.current === preset.n) return;
+    presetSeen.current = preset.n;
+    setQ(preset.text);
+    void search(undefined, preset.text);
+    box.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset?.n]);
 
   async function search(e?: React.FormEvent, text?: string) {
     e?.preventDefault();
@@ -73,14 +90,15 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
   }
 
   const fits = popular.filter((p) => p.durationSec <= maxDurationSec);
-  const list: SearchResult[] | null = results ?? (showPopular && fits.length > 0 ? fits : null);
+  const popularShown = morePopular ? fits : fits.slice(0, POPULAR_FIRST);
+  const list: SearchResult[] | null = results ?? (showPopular && fits.length > 0 ? popularShown : null);
 
   return (
-    <div className="search">
+    <div className="search" ref={box}>
       <form className="searchbar" onSubmit={search} role="search">
         <input
           type="search"
-          placeholder="Música, artista ou link do YouTube"
+          placeholder="Música, artista ou link YT"
           aria-label="Buscar música, artista ou colar link do YouTube"
           value={q}
           maxLength={100}
@@ -112,7 +130,7 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
         <p className="banner warn small">Esse vídeo não parece versão karaokê: pode ter a voz do cantor original. Confere antes de escolher.</p>
       )}
       {!results && !busy && <p className="muted small link-tip">Não achou? Procura o karaokê no YouTube, copia o link e cola aqui.</p>}
-      {!results && list && <h2 className="section-title">Mais cantadas no Cogumelo</h2>}
+      {!results && list && <h2 className="section-title">Mais cantadas do Cogumelo</h2>}
       {list && list.length > 0 && (
         <ul className="results">
           {list.map((r) => (
@@ -128,6 +146,11 @@ export default function SongSearch({ authHeaders, maxDurationSec, pickLabel, onP
             </li>
           ))}
         </ul>
+      )}
+      {!results && list && fits.length > POPULAR_FIRST && (
+        <button type="button" className="btn ghost small self-start" onClick={() => setMorePopular((m) => !m)}>
+          {morePopular ? 'Ver menos' : `Ver mais (${fits.length - POPULAR_FIRST})`}
+        </button>
       )}
     </div>
   );
