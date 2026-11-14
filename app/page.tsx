@@ -8,7 +8,8 @@ import Avatar from '@/components/Avatar';
 import SongSearch from '@/components/SongSearch';
 import { listenInserts, post, useLive, type ApiError } from '@/lib/useLive';
 import { browserClient } from '@/lib/supabase-browser';
-import { closeYtWindow, focusYtWindow, isEmbedBlocked, openYtWindow, readYtMode, saveYtMode, type YtWindowMode } from '@/lib/ytWindow';
+import { closeYtWindow, focusYtWindow, isEmbedBlocked, openYtWindow, readYtMode, saveYtMode, screenRect, type YtWindowMode } from '@/lib/ytWindow';
+import { extClose, extCommand, extOpen, listenExtension } from '@/lib/ytExtension';
 import { fmtScore, isGifUrl, photoUrl, REACTIONS, scorePhrase, STICKERS, type QueueItem, type SearchResult, type Settings } from '@/lib/types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -115,6 +116,8 @@ const LOAD_GRACE = 5000;
 // song waits for someone to press "Terminou" (or Pular). Only as a safety net, if nobody does, the
 // queue moves this long after the video's length.
 const YT_WINDOW_SAFETY_SEC = 10 * 60;
+// With the Chrome extension: no news from it for this long = it stopped working, use the manual way.
+const YT_EXT_SILENT_MS = 25000;
 const YT_WINDOW_BLOCKED_SKIP_MS = 90000;
 // Ranking or contest results on screen hold the queue. With people waiting they close by themselves after this.
 const HOLD_AUTOCLOSE_MS = 3 * 60 * 1000;
@@ -239,8 +242,14 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   // The song on screen plays in a youtube.com window (its owner blocked other sites). `offset` +
   // time since `since` = where the song is; `since` is null while the window is shut (pause, or
   // Chrome blocked it and the screen waits for a click since `blockedAt`).
-  const ytWin = useRef<{ id: number; videoId: string; win: Window | null; offset: number; since: number | null; endAt: number; blockedAt: number | null } | null>(null);
-  const [ytWinState, setYtWinState] = useState<null | 'open' | 'blocked'>(null);
+  // `viaExt`: the Chrome extension opened the window and tells when the video ends.
+  const ytWin = useRef<{
+    id: number; videoId: string; win: Window | null; offset: number; since: number | null; endAt: number; blockedAt: number | null;
+    opened: boolean; viaExt: boolean; extAt: number; extStatus: boolean;
+  } | null>(null);
+  const [ytWinState, setYtWinState] = useState<null | 'open' | 'blocked' | 'ext'>(null);
+  // version of the Chrome extension on this computer (null = not installed / not answering)
+  const extRef = useRef<string | null>(null);
   const [ytMode, setYtMode] = useState<YtWindowMode>('page');
   const ytModeRef = useRef<YtWindowMode>('page');
   const soundTried = useRef<number | null>(null); // queue id whose sound was already retried
@@ -421,8 +430,28 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     const w = ytWin.current;
     // Once YouTube loads, Chrome cuts this page's link to the window (YouTube asks for that), so it
     // can no longer be closed or reused from here: opening again would play the song twice.
-    if (!w || w.win) return false;
+    if (!w || w.opened) return false;
     const at = ytElapsed();
+    if (extRef.current && settingsRef.current?.yt_extension !== false) {
+      // the extension opens it, follows the video and says when it ended
+      const area = holderRef.current;
+      w.opened = true;
+      w.viaExt = true;
+      w.extAt = Date.now();
+      w.offset = at;
+      w.since = Date.now();
+      w.blockedAt = null;
+      extOpen({
+        queueId: w.id,
+        videoId: w.videoId,
+        start: at,
+        mode: ytModeRef.current,
+        rect: area ? screenRect(area) : { x: window.screenX, y: window.screenY, w: Math.round(window.innerWidth * 0.75), h: window.innerHeight },
+      });
+      setYtWinState('ext');
+      flash('');
+      return true;
+    }
     const win = openYtWindow(holderRef.current, w.videoId, at, ytModeRef.current);
     w.offset = at;
     w.win = win;
@@ -433,6 +462,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       flash('O Chrome bloqueou a janela do YouTube. Clica em "Abrir no YouTube".', true);
       return false;
     }
+    w.opened = true;
     w.since = Date.now();
     w.blockedAt = null;
     setYtWinState('open');
@@ -444,9 +474,26 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   function ytStop() {
     const w = ytWin.current;
     if (!w) return;
+    if (w.viaExt) extClose(w.id);
     closeYtWindow(w.win);
     ytWin.current = null;
     setYtWinState(null);
+  }
+
+  /**
+   * The extension failed or went quiet. If its window never played, open one the old way; if it
+   * did play, leave it and wait for "Terminou" (opening another would play the song twice).
+   */
+  function ytExtFailed() {
+    const w = ytWin.current;
+    if (!w || !w.viaExt) return;
+    const played = w.extStatus;
+    w.viaExt = false;
+    extRef.current = null; // not trusted again until it says "ready" (next time the screen opens)
+    if (played) return void setYtWinState('open');
+    w.opened = false;
+    if (!onHold(settingsRef.current)) ytOpenNow();
+    else setYtWinState('open');
   }
 
   /** The video refused to play here: play it on youtube.com instead, over the video area. */
@@ -457,7 +504,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     const max = settingsRef.current?.max_duration_sec ?? 360;
     const length = (item.duration_sec > 0 ? item.duration_sec : max) + YT_WINDOW_SAFETY_SEC;
     closeYtWindow(ytWin.current?.win);
-    ytWin.current = { id: item.id, videoId: item.video_id, win: null, offset: startSeconds, since: null, endAt: length, blockedAt: null };
+    ytWin.current = { id: item.id, videoId: item.video_id, win: null, offset: startSeconds, since: null, endAt: length, blockedAt: null, opened: false, viaExt: false, extAt: 0, extStatus: false };
     if (onHold(settingsRef.current)) return void setYtWinState('open'); // opens when the hold ends
     ytOpenNow();
   }
@@ -474,8 +521,39 @@ function Tv({ onLogout }: { onLogout: () => void }) {
 
   /** Button on the screen when Chrome blocked the window: opens it (a click is never blocked). */
   function ytBringBack() {
-    if (ytWin.current && !ytWin.current.win) ytOpenNow();
+    if (ytWin.current && !ytWin.current.opened) ytOpenNow();
   }
+
+  // The Chrome extension (when installed): says it is there, and follows the YouTube window.
+  useEffect(
+    () =>
+      listenExtension((m) => {
+        if (m.type === 'ready') {
+          extRef.current = m.version || '1';
+          return;
+        }
+        if (m.type === 'gone') {
+          extRef.current = null;
+          return ytExtFailed();
+        }
+        const w = ytWin.current;
+        if (!w || !w.viaExt || ('queueId' in m && m.queueId != null && m.queueId !== w.id)) return;
+        w.extAt = Date.now();
+        if (m.type === 'status') {
+          if (!m.ad && m.time > 0) {
+            w.extStatus = true;
+            w.offset = m.time;
+            w.since = m.paused ? null : Date.now();
+          }
+        } else if (m.type === 'ended' || m.type === 'closed') {
+          // the video ended, or someone closed the YouTube window: next song
+          if (playingRef.current?.id === w.id) void ytFinished();
+          else ytStop();
+        } else if (m.type === 'error') ytExtFailed();
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   function ytSwitchMode() {
     const mode: YtWindowMode = ytModeRef.current === 'page' ? 'video' : 'page';
@@ -739,7 +817,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       const mirror = roleRef.current === 'mirror';
       const passive = mirror && !mayTakeBack();
       try {
-        const d = await post('/api/tv', { id: tvIdRef.current, ...(passive ? { passive: true } : {}) });
+        const d = await post('/api/tv', { id: tvIdRef.current, ext: extRef.current ?? '', ...(passive ? { passive: true } : {}) });
         if (stop) return;
         if (d?.owner === false) {
           setRole('mirror');
@@ -908,8 +986,11 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   const hold = onHold(settings);
   useEffect(() => {
     if (ytWin.current) {
-      // the window cannot be paused from here: only one that waited for the hold opens now
-      if (!hold && !ytWin.current.win && ytWin.current.blockedAt == null) ytOpenNow();
+      // the extension pauses the YouTube window; without it the window cannot be paused from here,
+      // and only one that waited for the hold opens now
+      const w = ytWin.current;
+      if (w.viaExt) return extCommand(w.id, hold ? 'pause' : 'play');
+      if (!hold && !w.opened && w.blockedAt == null) ytOpenNow();
       return;
     }
     const p = playerRef.current;
@@ -947,6 +1028,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   // remote control: volume
   useEffect(() => {
     if (playerReady.current && settings) playerRef.current?.setVolume?.(settings.volume);
+    if (settings && ytWin.current?.viaExt) extCommand(ytWin.current.id, 'volume', settings.volume);
   }, [settings?.volume, settings]);
 
   // remote control: restart the current song
@@ -956,7 +1038,11 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     const prev = lastRestart.current;
     lastRestart.current = settings.restart_at;
     if (prev === undefined || prev === settings.restart_at) return; // first load, or nothing new
-    if (ytWin.current) return; // the YouTube window cannot be restarted from here
+    if (ytWin.current) {
+      // only the extension can restart the YouTube window
+      if (ytWin.current.viaExt) extCommand(ytWin.current.id, 'restart');
+      return;
+    }
     const p = playerRef.current;
     if (!p || !playerReady.current || !videoStarted.current) return;
     writeProgress(null);
@@ -1001,6 +1087,12 @@ function Tv({ onLogout }: { onLogout: () => void }) {
       // playing in the YouTube window: the song's clock decides when it is over
       const w = ytWin.current;
       if (w && w.id === cur.id) {
+        if (w.viaExt && Date.now() - w.extAt > YT_EXT_SILENT_MS) {
+          if (onHold(settingsRef.current) && w.extStatus) w.extAt = Date.now(); // paused: it may just be quiet
+          else ytExtFailed();
+          return;
+        }
+        if (w.viaExt && w.since == null) return; // paused in the YouTube window
         if (w.since == null) {
           if (w.blockedAt == null) return void (onHold(settingsRef.current) || ytOpenNow()); // waited for a hold
           if (Date.now() - w.blockedAt < YT_WINDOW_BLOCKED_SKIP_MS) return;
@@ -1186,7 +1278,9 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             <span className="eyebrow">Tocando no YouTube</span>
             <h2>{playing.title}</h2>
             <p>
-              {ytWinState === 'blocked'
+              {ytWinState === 'ext'
+                ? 'Esse vídeo só toca no site do YouTube, numa janela aqui por cima. A extensão acompanha e volta pra fila sozinha quando a música acabar.'
+                : ytWinState === 'blocked'
                 ? 'O Chrome bloqueou a janela do YouTube. Clica no botão pra abrir.'
                 : 'Esse vídeo só toca no site do YouTube, numa janela aqui por cima. Quando acabar, feche a janela do YouTube (Alt+F4) e clique em Terminou.'}
             </p>

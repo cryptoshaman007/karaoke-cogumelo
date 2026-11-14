@@ -44,7 +44,7 @@ export function ytWatchUrl(videoId: string, startSeconds: number, mode: YtWindow
 }
 
 /** The screen rectangle (in screen pixels) of an element of this page. */
-function screenRect(el: HTMLElement) {
+export function screenRect(el: HTMLElement) {
   const r = el.getBoundingClientRect();
   const border = Math.max(0, (window.outerWidth - window.innerWidth) / 2);
   const top = Math.max(0, window.outerHeight - window.innerHeight - border);

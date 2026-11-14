@@ -1,0 +1,17 @@
+EXTENSÃO DO TELÃO – KARAOKÊ COGUMELO
+
+Pra que serve: alguns vídeos (KaraFun e outros) só tocam no site do YouTube. Com esta extensão, o
+telão abre esses vídeos numa janela do YouTube por cima do vídeo, acompanha a música e, quando ela
+acaba, fecha a janela e segue a fila sozinho.
+
+Como instalar (uma vez só, no Chrome do computador do telão):
+1. Abra o Chrome e digite na barra de endereço: chrome://extensions
+2. Ligue "Modo do desenvolvedor" (botão no canto de cima, à direita).
+3. Clique em "Carregar sem compactação" e escolha esta pasta (a que tem o arquivo manifest.json).
+4. Pronto. Recarregue a página do telão (F5). No admin, em "Telão e celular", aparece
+   "Extensão do telão: ativa".
+
+Não apague nem mude esta pasta de lugar depois de instalar: o Chrome usa ela direto.
+Se o Chrome mostrar o aviso "Desativar extensões no modo de desenvolvedor", clique em "Manter".
+Pra atualizar uma versão nova: troque os arquivos da pasta e, em chrome://extensions, clique na
+setinha de recarregar da extensão.

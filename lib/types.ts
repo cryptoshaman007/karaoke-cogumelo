@@ -65,6 +65,8 @@ export interface Settings {
   songs_per_person: number;
   /** selfie opcional de quem canta, no telão, na fila e no ranking */
   photos_enabled: boolean;
+  /** usar a extensão do Chrome do telão nos vídeos que só tocam no youtube.com (vazio = banco sem a migração 012) */
+  yt_extension?: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
