@@ -119,6 +119,8 @@ const YT_WINDOW_SAFETY_SEC = 10 * 60;
 // With the Chrome extension: no news from it for this long = it stopped working, use the manual way.
 const YT_EXT_SILENT_MS = 25000;
 const YT_WINDOW_BLOCKED_SKIP_MS = 90000;
+// The extension's YouTube window is open but the video never started (only counted while not paused).
+const YT_EXT_NOSTART_SKIP_MS = 120000;
 // Ranking or contest results on screen hold the queue. With people waiting they close by themselves after this.
 const HOLD_AUTOCLOSE_MS = 3 * 60 * 1000;
 
@@ -245,7 +247,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
   // `viaExt`: the Chrome extension opened the window and tells when the video ends.
   const ytWin = useRef<{
     id: number; videoId: string; win: Window | null; offset: number; since: number | null; endAt: number; blockedAt: number | null;
-    opened: boolean; viaExt: boolean; extAt: number; extStatus: boolean;
+    opened: boolean; viaExt: boolean; extAt: number; extStatus: boolean; notStartedMs: number;
   } | null>(null);
   const [ytWinState, setYtWinState] = useState<null | 'open' | 'blocked' | 'ext'>(null);
   // version of the Chrome extension on this computer (null = not installed / not answering)
@@ -491,6 +493,8 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     w.viaExt = false;
     extRef.current = null; // not trusted again until it says "ready" (next time the screen opens)
     if (played) return void setYtWinState('open');
+    // its window may still be open (just silent): never leave two YouTube windows playing
+    extClose(w.id);
     w.opened = false;
     if (!onHold(settingsRef.current)) ytOpenNow();
     else setYtWinState('open');
@@ -504,7 +508,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     const max = settingsRef.current?.max_duration_sec ?? 360;
     const length = (item.duration_sec > 0 ? item.duration_sec : max) + YT_WINDOW_SAFETY_SEC;
     closeYtWindow(ytWin.current?.win);
-    ytWin.current = { id: item.id, videoId: item.video_id, win: null, offset: startSeconds, since: null, endAt: length, blockedAt: null, opened: false, viaExt: false, extAt: 0, extStatus: false };
+    ytWin.current = { id: item.id, videoId: item.video_id, win: null, offset: startSeconds, since: null, endAt: length, blockedAt: null, opened: false, viaExt: false, extAt: 0, extStatus: false, notStartedMs: 0 };
     if (onHold(settingsRef.current)) return void setYtWinState('open'); // opens when the hold ends
     ytOpenNow();
   }
@@ -541,6 +545,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
         w.extAt = Date.now();
         if (m.type === 'status') {
           if (!m.ad && m.time > 0) {
+            if (!w.extStatus) deadSkips.current = 0;
             w.extStatus = true;
             w.offset = m.time;
             w.since = m.paused ? null : Date.now();
@@ -1091,6 +1096,24 @@ function Tv({ onLogout }: { onLogout: () => void }) {
           if (onHold(settingsRef.current) && w.extStatus) w.extAt = Date.now(); // paused: it may just be quiet
           else ytExtFailed();
           return;
+        }
+        // The extension's window is open but the video never started there (age check, "video
+        // unavailable", a page that did not load...): skip it, as with any video that never starts.
+        // Several in a row means the problem is the computer or the internet: then keep waiting.
+        if (w.viaExt && !w.extStatus && !onHold(settingsRef.current) && isOnline()) {
+          w.notStartedMs += TICK;
+          if (w.notStartedMs >= YT_EXT_NOSTART_SKIP_MS) {
+            w.notStartedMs = 0;
+            if (deadSkips.current >= MAX_DEAD_SKIPS) {
+              flash('O YouTube não tá abrindo os vídeos. Dá uma olhada na internet do computador, ou aperta "Pular".', true);
+              return;
+            }
+            deadSkips.current += 1;
+            ytStop();
+            flash('Esse vídeo não começou no YouTube. Vamos pro próximo!');
+            writeProgress(null);
+            return void advance('skipped', cur.id, false);
+          }
         }
         if (w.viaExt && w.since == null) return; // paused in the YouTube window
         if (w.since == null) {

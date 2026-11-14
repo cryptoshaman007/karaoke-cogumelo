@@ -316,6 +316,9 @@ async function wire(page, b, { admin = true } = {}) {
     }
     if (path === '/api/search') {
       if (b.searchMode === 'hang') return;
+      if (b.searchMode === 'fallback') {
+        return json({ results: [{ videoId: 'histAAAAAA1', title: 'Evidências (karaokê)', thumbnail: '', durationSec: 200, channel: '' }], fallback: 'history' });
+      }
       const q = new URL(req.url()).searchParams.get('q') ?? '';
       if (/youtu/.test(q)) {
         return json({ results: [{ videoId: 'linkAAAAAA1', title: 'Evidências - Chitãozinho e Xororó (clipe oficial)', thumbnail: '', durationSec: 240, channel: 'Canal' }], fromLink: true, karaoke: false });
@@ -1765,6 +1768,57 @@ await test('telão: opção do admin esconde e mostra o "líder da noite"', asyn
   expect((await until(page, async () => (await page.locator('.tv-message.ranking-on').count()) === 0, 5000)) >= 0, 'o líder continuou com a opção desligada');
   expect(errors.length === 0, errors.join('; '));
   await ctx.close();
+});
+
+await test('celular: busca do YouTube fora do ar mostra as já cantadas no bar com um aviso', async () => {
+  const b = makeBackend();
+  b.searchMode = 'fallback';
+  const { page, ctx, errors } = await openPhone(b);
+  await page.getByRole('searchbox').fill('evidencias');
+  await page.getByRole('button', { name: 'Buscar' }).click();
+  await run(page, 1500);
+  expect((await page.getByText(/deu uma engasgada/).count()) === 1, 'não avisou que veio do plano B');
+  expect((await page.getByRole('button', { name: 'Cantar' }).count()) === 1, 'não mostrou a música do histórico');
+  await page.getByRole('button', { name: 'Cantar' }).click();
+  await run(page, 2000);
+  expect(b.queuePosts === 1, 'não deu pra escolher a música do plano B');
+  expect(errors.length === 0, errors.join('; '));
+  await ctx.close();
+});
+
+await test('extensão abre a janela mas o vídeo nunca começa: pula sozinho, sem travar a noite', async () => {
+  const b = makeBackend();
+  b.add('Ana', 'blockedAAA1');
+  b.add('Bia', 'vidBBBBBBB2');
+  const fakeExt = () => {
+    window.__ext = { opens: [], closes: 0 };
+    const say = (m) => window.postMessage({ source: 'karaoke-ext', version: '1.0.0', ...m }, location.origin);
+    window.addEventListener('message', (e) => {
+      const m = e.data;
+      if (!m || m.source !== 'karaoke-page') return;
+      if (m.type === 'hello') say({ type: 'ready' });
+      if (m.type === 'open') window.__ext.opens.push(m);
+      if (m.type === 'close') window.__ext.closes++;
+    });
+    window.__extSay = say;
+  };
+  const { page, ctx } = await openTv(b, { init: fakeExt });
+  await page.evaluate(() => (window.__yt.behavior.blockedAAA1 = 'error150'));
+  expect((await until(page, async () => (await page.evaluate(() => window.__ext.opens.length)) > 0, 30000)) >= 0, 'não pediu pra extensão abrir');
+  const q = await page.evaluate(() => window.__ext.opens[0].queueId);
+  // the YouTube page is there (status every second) but the clock never leaves zero
+  let moved = -1;
+  for (let i = 1; i <= 200 && moved < 0; i++) {
+    await page.evaluate((id) => window.__extSay({ type: 'status', queueId: id, time: 0, duration: 0, paused: true, ad: false }), q);
+    await run(page, 1000);
+    if (b.queue[1].status === 'playing') moved = i;
+  }
+  expect(moved > 60, `pulou cedo demais (${moved} s)`);
+  expect(moved > 0, `ficou parado esperando um vídeo que nunca começou: ${statuses(b)}`);
+  expect(b.queue[0].status === 'skipped', 'a que não tocou deveria ficar como pulada');
+  expect((await page.evaluate(() => window.__ext.closes)) > 0, 'não mandou a extensão fechar a janela');
+  await ctx.close();
+  return `pulou em ${moved} s`;
 });
 
 await browser.close();

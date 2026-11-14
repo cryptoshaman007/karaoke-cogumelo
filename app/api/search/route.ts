@@ -1,7 +1,8 @@
 import { NextRequest } from 'next/server';
 import { getSettings } from '@/lib/supabase-server';
 import { checkAdmin, singerFromRequest } from '@/lib/auth';
-import { searchKaraoke, videoById } from '@/lib/youtube';
+import { SearchUnreadable, searchKaraoke, videoById } from '@/lib/youtube';
+import { fallbackSearch } from '@/lib/searchFallback';
 import { looksKaraoke, youtubeIdFrom } from '@/lib/song';
 import { BLOCKED_VIDEOS_OK, NOT_EMBEDDABLE } from '@/lib/embed';
 import { fail, json } from '@/lib/http';
@@ -32,13 +33,27 @@ export async function GET(req: NextRequest) {
   }
   const linked = youtubeIdFrom(q);
   if (linked) return fromLink(linked);
+  let settings;
   try {
-    const settings = await getSettings();
-    const results = await searchKaraoke(q, settings.max_duration_sec);
-    return json({ results: results.map(signSong), maxDurationSec: settings.max_duration_sec });
+    settings = await getSettings();
+  } catch {
+    return fail('Deu uma travadinha aqui. Tenta de novo em instantes.', 503);
+  }
+  const max = settings.max_duration_sec;
+  const t0 = Date.now();
+  try {
+    const results = await searchKaraoke(q, max);
+    return json({ results: results.map(signSong), maxDurationSec: max });
   } catch (e) {
-    console.error('search failed', e);
-    return fail('A busca falhou. Tenta de novo em instantes.', 502);
+    console.error('search failed, using plan B', e);
+    // YouTube failed or changed its answer: plan B (official search with a key, then the songs
+    // already sung at the bar), so the customers never get stuck without a song
+    // (the official search only if there is still time: the phone gives up at 24 s)
+    const b = await fallbackSearch(q, max, Date.now() - t0 < 12000);
+    if (b.results.length || e instanceof SearchUnreadable) {
+      return json({ results: b.results.map(signSong), maxDurationSec: max, fallback: b.source });
+    }
+    return fail('A busca do YouTube tá fora do ar agora. Tenta de novo, ou cola o link do YouTube aqui em cima.', 502);
   }
 }
 
