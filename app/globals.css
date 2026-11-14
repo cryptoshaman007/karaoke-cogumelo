@@ -374,6 +374,11 @@ input[type=search]::-webkit-search-cancel-button { display: none; }
 .results-screen > .avatar { width: clamp(100px, 10vw, 220px) !important; height: clamp(100px, 10vw, 220px) !important; }
 .results-screen li .avatar { width: clamp(32px, 2.6vw, 56px) !important; height: clamp(32px, 2.6vw, 56px) !important; }
 
+/* Video playing in a youtube.com window over the video area (seen when that window is behind) */
+.yt-window-card { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; padding: 4vw; text-align: center; background: radial-gradient(90% 80% at 50% 40%, #1b1530 0%, #0b0b0f 70%); z-index: 2; }
+.yt-window-card h2 { font-size: clamp(1.4rem, 3.2vw, 4rem); line-height: 1.1; max-width: 70vw; overflow-wrap: anywhere; }
+.yt-window-card p { color: var(--muted); font-size: clamp(.95rem, 1.4vw, 1.8rem); max-width: 56vw; }
+.yt-window-actions { display: flex; flex-wrap: wrap; gap: .6rem; justify-content: center; }
 /* ---------- celular: próxima música em destaque, aviso da vez, nota da noite ---------- */
 .card.next-song { border: 1.5px solid var(--accent); background: linear-gradient(180deg, rgba(167, 139, 250, .14), var(--panel) 70%); }
 .next-song-title { font-size: 1.15rem; font-weight: 700; color: var(--text); }

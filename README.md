@@ -73,6 +73,16 @@ Estas duas últimas precisam da migração `supabase/migrations/004_reserves_and
 - **Selfie (opcional):** a pessoa tira uma foto no celular, ela vira um JPEG quadrado pequeno e aparece no telão (vez da pessoa, palco, fila, ranking) e nas listas do celular. Fica só em uma tabela que o servidor lê, e some: quando a pessoa ou o admin apaga, quando a noite é zerada e, de qualquer jeito, depois de 18 h. Ligar/desligar em *Selfie de quem canta* no admin, que também tem *Fotos no telão* para apagar uma foto imprópria. Precisa da migração `006_selfies.sql`; sem ela o convite nem aparece.
 - **Figurinha da nota:** depois de cantar, o celular oferece uma imagem 1080×1350 (foto, nome, música, nota da galera e a marca do bar) para compartilhar ou salvar. É desenhada no próprio celular. A nota vem do ranking da noite (migração 005); sem ela a figurinha sai sem nota.
 
+### Vídeos que só tocam no YouTube
+
+Alguns canais (KaraFun e outros) não deixam o vídeo tocar fora do youtube.com. Quando chega a vez de um desses, o telão abre o youtube.com numa janela por cima da área do vídeo, e a fila continua à direita. A música acaba pela duração do vídeo (ou pelo limite de tempo); Pular, a próxima música ou Pausar no admin fecham a janela. Pra funcionar sem clique, o Chrome do telão precisa liberar pop-ups:
+
+```
+chrome.exe --autoplay-policy=no-user-gesture-required --disable-popup-blocking --start-fullscreen --app=https://karaoke-cogumelo.vercel.app
+```
+
+(O modo `--kiosk` não deixa abrir outra janela.) Se o Chrome bloquear mesmo assim, o telão mostra o botão "Abrir no YouTube". O botão "Mostrar só o vídeo" troca pra página do YouTube só com o player. Pra voltar a recusar esses vídeos na hora da escolha, ponha `BLOCKED_VIDEOS=skip` nas variáveis da Vercel.
+
 ## Estabilidade
 
 O telão foi feito para ficar a noite inteira aberto sem ninguém mexer:
