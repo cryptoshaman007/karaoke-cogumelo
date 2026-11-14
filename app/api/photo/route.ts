@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { guardPublic } from '@/lib/guard';
 import { db, getSettings, isMissingSchema, NEEDS_MIGRATION } from '@/lib/supabase-server';
 import { singerFromRequest } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
@@ -17,6 +18,8 @@ async function who(req: NextRequest) {
 
 /** The customer sends (or replaces) their selfie. */
 export async function POST(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   const { singer, error } = await who(req);
   if (error) return error;
   if (!singer) return fail('Entre com seu nome primeiro', 401);
@@ -44,6 +47,8 @@ export async function POST(req: NextRequest) {
 
 /** "Apagar minha foto": it disappears from the projector, the queue and the ranking. */
 export async function DELETE(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   const { singer, error } = await who(req);
   if (error) return error;
   if (!singer) return fail('Entre com seu nome primeiro', 401);

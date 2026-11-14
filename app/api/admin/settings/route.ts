@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { db } from '@/lib/supabase-server';
 import { requireAdmin } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
+import { forgetGuardCache } from '@/lib/guard';
 
 export async function POST(req: NextRequest) {
   const denied = await requireAdmin();
@@ -40,6 +41,7 @@ export async function POST(req: NextRequest) {
     patch.night_reset_hour = h < 0 ? null : h;
   }
   if (body.ytExtension != null) patch.yt_extension = Boolean(body.ytExtension);
+  if (body.onlyBrazil != null) patch.only_brazil = Boolean(body.onlyBrazil);
   if (body.tvAddEnabled != null) patch.tv_add_enabled = Boolean(body.tvAddEnabled);
   if (body.songsPerPerson != null) {
     const n = Math.round(Number(body.songsPerPerson));
@@ -67,5 +69,6 @@ export async function POST(req: NextRequest) {
     }
     return fail(error.message, 500);
   }
+  if ('only_brazil' in patch) forgetGuardCache();
   return json({ ok: true });
 }

@@ -7,7 +7,7 @@ import { useAdmin } from '@/lib/useAdmin';
 import Icon from '@/components/Icon';
 import Avatar from '@/components/Avatar';
 import SongSearch from '@/components/SongSearch';
-import { listenInserts, post, useLive, type ApiError } from '@/lib/useLive';
+import { get, listenInserts, post, useLive, type ApiError } from '@/lib/useLive';
 import { browserClient } from '@/lib/supabase-browser';
 import { closeYtWindow, focusYtWindow, isEmbedBlocked, openYtWindow, readYtMode, saveYtMode, screenRect, type YtWindowMode } from '@/lib/ytWindow';
 import { extClose, extCommand, extOpen, listenExtension } from '@/lib/ytExtension';
@@ -192,6 +192,32 @@ export default function TvPage() {
 
 function Tv({ onLogout }: { onLogout: () => void }) {
   const { queue, singers, settings, results, ranking, loaded, refresh } = useLive({ tv: true });
+
+  // Emergency night code: only the admin can read it, so the projector asks when it is switched on
+  // or changed (settings.night_code_at). While it cannot get it, it keeps trying.
+  const codeAt = settings?.night_code_at ?? null;
+  const [nightCode, setNightCode] = useState<string | null>(null);
+  useEffect(() => {
+    if (!codeAt) {
+      setNightCode(null);
+      return;
+    }
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = async () => {
+      try {
+        const d = await get('/api/admin/guard');
+        if (!stop) setNightCode(typeof d.code === 'string' ? d.code : null);
+      } catch {
+        if (!stop) timer = setTimeout(load, 5000);
+      }
+    };
+    void load();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, [codeAt]);
   const [started, setStarted] = useState(startedOnce);
   // 'owner' plays the karaoke; 'mirror' is a second screen that only shows the queue; 'checking'
   // while the first answer about who is in charge has not come (nothing plays meanwhile)
@@ -1272,7 +1298,8 @@ function Tv({ onLogout }: { onLogout: () => void }) {
     };
   }, []);
 
-  const singUrl = singUrlFor(origin);
+  // emergency night code (admin): the QR carries it and it is written under the QR
+  const singUrl = nightCode ? `${singUrlFor(origin)}${singUrlFor(origin).includes('?') ? '&' : '?'}c=${nightCode}` : singUrlFor(origin);
   const adminUrl = origin ? `${origin}/admin` : '';
   const nowName = playing ? singers[playing.singer_id]?.name ?? '' : '';
   const photoOf = (singerId: string | null | undefined) => (singerId ? photoUrl(singers[singerId], settings) : null);
@@ -1338,6 +1365,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             {open && singUrl && (
               <div className="qr big">
                 <QRCode value={singUrl} size={320} />
+                {nightCode && <span className="qr-code">{nightCode}</span>}
               </div>
             )}
           </div>
@@ -1619,6 +1647,7 @@ function Tv({ onLogout }: { onLogout: () => void }) {
             <>
               <div className="qr">
                 <QRCode value={singUrl} size={140} />
+                {nightCode && <span className="qr-code">{nightCode}</span>}
               </div>
               <span>
                 Escaneia

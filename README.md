@@ -86,6 +86,15 @@ chrome.exe --autoplay-policy=no-user-gesture-required --disable-popup-blocking -
 
 **Com a extensão do Chrome (recomendado):** a pasta [`extensao-chrome/`](extensao-chrome/) é uma extensão pro Chrome do telão. Com ela, o telão abre a janela do YouTube por ela, acompanha o vídeo (pausar e voltar no YouTube não atrapalha), e quando a música acaba fecha a janela e segue a fila sozinho. Fechar a janela na mão também passa pra próxima. O Pausar, o Recomeçar e o volume do admin chegam na janela. Não precisa liberar pop-ups. Como instalar: veja `extensao-chrome/LEIA-ME.txt` (chrome://extensions → Modo do desenvolvedor → Carregar sem compactação → escolher a pasta). No admin, em "Telão e celular", aparece se a extensão está ativa e um interruptor pra usar ou não. Se ela não responder, o telão volta pro jeito manual abaixo. Precisa da migração `012_yt_extension.sql`.
 
+### Segurança: só Brasil e código da noite
+
+No admin, em *Segurança* (precisa da migração `013_access_guard.sql`):
+
+- **Só Brasil:** celular que a Vercel localiza fora do Brasil (ou com VPN de fora) vê uma tela "só pra quem tá no bar" e não consegue entrar, buscar nem pedir música. O admin e o telão nunca são bloqueados, nem viajando.
+- **Código da noite (emergência):** o QR das paredes (`cantar.cogumelobar.com`) continua sendo o normal. Se entrar bot ou gente de fora por ele, o botão *Gerar código da noite* faz o telão mostrar um QR novo (com o código no link e escrito embaixo) e só ele vale. Quem já estava no karaokê escaneia o QR do telão uma vez e não perde o lugar na fila. *Voltar ao QR normal* desliga, e zerar a noite (no botão ou na limpeza automática) também, então o QR das paredes volta a valer no dia seguinte. Quem errar o código muitas vezes espera uns minutos.
+
+Os dois só olham as rotas do cantor (`/api/join`, `/api/queue`, `/api/search`...). Se o banco falhar, ninguém é barrado. Teste: `tests/gate.mjs`.
+
 ## Estabilidade
 
 O telão foi feito para ficar a noite inteira aberto sem ninguém mexer:
@@ -104,7 +113,7 @@ O telão foi feito para ficar a noite inteira aberto sem ninguém mexer:
 
 ## Banco de dados
 
-`supabase/schema.sql` cria o banco do zero. A migração `007_review_fixes.sql` traz o limite de tentativas num passo só, a sessão do admin que dá para encerrar (*Sair* e *Sair de todos os aparelhos*), a trava de um telão só e a limpeza da noite mais cuidadosa. A `008_public_read_limits.sql` faz a chave pública ver só a noite atual (nomes, fila e ranking das últimas 24 h); o arquivo traz o comando para desfazer. Sem elas o app funciona como antes. A migração `006_selfies.sql` traz as selfies (rode depois da 005). A migração `005_night_ranking_gifs.sql` traz o ranking da noite, os GIFs e a limpeza automática; sem ela o botão *Zerar a noite* já funciona (limpeza simples), e as outras funções novas ficam desligadas. Depois rode, em ordem, os arquivos de `supabase/migrations/` (SQL Editor do Supabase). As migrações só adicionam coisas; o app funciona sem elas, mas as funções novas do admin (pausar, volume, recado, fila aberta/fechada) avisam que precisam da atualização.
+`supabase/schema.sql` cria o banco do zero. A migração `007_review_fixes.sql` traz o limite de tentativas num passo só, a sessão do admin que dá para encerrar (*Sair* e *Sair de todos os aparelhos*), a trava de um telão só e a limpeza da noite mais cuidadosa. A `008_public_read_limits.sql` faz a chave pública ver só a noite atual (nomes, fila e ranking das últimas 24 h); o arquivo traz o comando para desfazer. Sem elas o app funciona como antes. A `013_access_guard.sql` traz o "Só Brasil" e o código da noite (a tabela do código fica fechada pra chave pública). A migração `006_selfies.sql` traz as selfies (rode depois da 005). A migração `005_night_ranking_gifs.sql` traz o ranking da noite, os GIFs e a limpeza automática; sem ela o botão *Zerar a noite* já funciona (limpeza simples), e as outras funções novas ficam desligadas. Depois rode, em ordem, os arquivos de `supabase/migrations/` (SQL Editor do Supabase). As migrações só adicionam coisas; o app funciona sem elas, mas as funções novas do admin (pausar, volume, recado, fila aberta/fechada) avisam que precisam da atualização.
 
 ## Rodar localmente
 

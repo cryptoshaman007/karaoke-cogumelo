@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { guardPublic } from '@/lib/guard';
 import { db, isMissingSchema, NEEDS_MIGRATION } from '@/lib/supabase-server';
 import { hashToken, singerFromRequest } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
@@ -7,6 +8,8 @@ export const dynamic = 'force-dynamic';
 
 /** Contest or night ranking: a customer scores (1-5) whoever is singing right now. Can be changed until the song ends. */
 export async function POST(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   const token = req.headers.get('x-singer-token');
   if (!token || token.length > 100) return fail('Entre com seu nome primeiro', 401);
   const score = Number((await readBody(req)).score);
@@ -34,6 +37,8 @@ export async function POST(req: NextRequest) {
 
 /** The vote this customer already gave to the song that is playing (so the phone can highlight it). */
 export async function GET(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   let singer;
   try {
     singer = await singerFromRequest(req);

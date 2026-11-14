@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getSettings } from '@/lib/supabase-server';
 import { checkAdmin, singerFromRequest } from '@/lib/auth';
+import { guardPublic } from '@/lib/guard';
 import { SearchUnreadable, searchKaraoke, videoById } from '@/lib/youtube';
 import { fallbackSearch } from '@/lib/searchFallback';
 import { looksKaraoke, youtubeIdFrom } from '@/lib/song';
@@ -17,6 +18,8 @@ export async function GET(req: NextRequest) {
   // Customers search with their token; the admin panel searches with its cookie.
   let rateKey: string | null = null;
   if ((await checkAdmin()) !== 'yes') {
+    const gated = await guardPublic(req);
+    if (gated) return gated;
     let singer;
     try {
       singer = await singerFromRequest(req);

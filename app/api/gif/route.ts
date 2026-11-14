@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { guardPublic } from '@/lib/guard';
 import { db, isMissingSchema, NEEDS_MIGRATION } from '@/lib/supabase-server';
 import { hashToken, singerFromRequest } from '@/lib/auth';
 import { fail, json, readBody } from '@/lib/http';
@@ -10,6 +11,8 @@ export const dynamic = 'force-dynamic';
 
 /** GIF search for the phone. `search: false` means only the stickers and the hand-picked GIFs are available. */
 export async function GET(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   if (!gifSearchEnabled()) return json({ search: false, results: [] });
   let singer;
   try {
@@ -33,6 +36,8 @@ export async function GET(req: NextRequest) {
 
 /** A customer sends a sticker or a GIF to the projector. */
 export async function POST(req: NextRequest) {
+  const gated = await guardPublic(req);
+  if (gated) return gated;
   const token = req.headers.get('x-singer-token');
   if (!token || token.length > 100) return fail('Entre com seu nome primeiro', 401);
   const body = await readBody(req);
